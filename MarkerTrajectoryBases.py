@@ -34,6 +34,7 @@ Limitations:
 # %% Imports
 import os
 from math import factorial
+import warnings
 
 import numpy as np
 import c3d
@@ -217,7 +218,9 @@ def read_c3d_file(file_path, output_fps=30):
     :return: marker data
     """
     with open(file_path, 'rb') as file_handle:
-        reader = c3d.Reader(file_handle)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
+            reader = c3d.Reader(file_handle)
         marker_labels = reader.point_labels
         print("Marker Labels:", ",".join(marker_labels))
         first_frame = reader.first_frame()
@@ -228,7 +231,7 @@ def read_c3d_file(file_path, output_fps=30):
         n_frames = last_frame - first_frame + 1
         total_length = n_frames / fps
         print("Clip length in total:", humanize_time(total_length))
-        # Extract Positionsfor each frame.
+        # Extract positions for each frame.
         pos_array = np.empty([n_frames, len(marker_labels), 3])
         pos_array.fill(np.NAN)
         cond_array = np.empty([n_frames, len(marker_labels)])
@@ -261,7 +264,7 @@ if __name__ == "__main__":
     except NameError:
         data_path = os.path.join(os.getcwd(), "Data")
     
-    c3d_filepath = os.path.join(data_path, "arm-4-4-4_30fps.c3d")
+    c3d_filepath = os.path.join(data_path, "arm-4-4-4_clean_30fps.c3d")
     out_fps = 30
     markers, conditionals = read_c3d_file(c3d_filepath, output_fps=out_fps)
     # todo: set marker groups by file/spectral clustering or other
@@ -281,6 +284,7 @@ if __name__ == "__main__":
     optim_rb_sets = [(markers_rb1, markers_rb2), (markers_rb2, markers_rb3)]
     points = list()
     for rb_set in optim_rb_sets:
+        print("\nOptimizing...")
         solution = minimize(cost_func, x0, args=(*rb_set, 0.2))
         if solution.success:
             # Extract estimated parameters
@@ -302,4 +306,6 @@ if __name__ == "__main__":
     for i in range(points.shape[1]):
         writer.add_frames([(points[:, i], np.array([[]]))])
     with open(os.path.join(data_path, 'test.c3d'), 'wb') as h:
-        writer.write(h)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
+            writer.write(h)
