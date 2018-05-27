@@ -44,7 +44,7 @@ def sum_squared(parameters, data):
     return np.sum((r-r_hat)**2)
 
 
-#%%Run optimization for uniform distribution.
+#%%Run optimization
 # Set initial values for parameters.
 x0 = np.array([xi.mean(), yi.mean(), zi.mean(), np.ptp(xi)*0.5])
 # Create data array that is closer to what we'll get from real world data.
