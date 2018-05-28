@@ -34,12 +34,15 @@ Limitations:
 # %% Imports
 import os
 from math import factorial
+from itertools import combinations
 import warnings
 
 import numpy as np
 import c3d
 from scipy.optimize import minimize
 from scipy.spatial import distance
+
+from MarkerGroups import read_c3d_file, avg_marker_pair_distance, marker_pair_distance_variance, compute_cluster, best_groups_from_clusters
 
 
 # %% auxiliary marker
@@ -80,37 +83,6 @@ def joint_from_markers(m1, m2, m3, m4, par1, par2, par3):
     """
     j = par1 * m1 + par2 * m2 + par3 * m3 + (1 - par1 - par2 - par3) * m4
     return j
-
-
-# %% Average joint to marker distance.
-def avg_joint_marker_distance(joint, marker) -> float:
-    """ Average distance between a marker and a joint over all frames.
-    
-    :param joint: joint trajectory
-    :type joint: np.array
-    :param marker: marker trajectory
-    :type marker: np.array
-    :return: average distance
-    :rtype: float
-    """
-    avg = np.linalg.norm(joint - marker, axis=1).sum() / len(marker)  # length of the vectors equals number of frames.
-    return avg
-
-
-# %% variance in joint-marker distance
-def joint_marker_distance_variance(joint, marker) -> float:
-    """Computes variance in joint-marker distance.
-    
-    :param joint: joint trajectory
-    :type joint: np.array
-    :param marker: marker trajectory
-    :type marker: np.array
-    :return: variance
-    :rtype: float
-    """
-    sig = np.square(np.linalg.norm(joint - marker, axis=1) - avg_joint_marker_distance(joint, marker)).sum()
-    sig /= len(marker)
-    return sig
 
 
 # %% Checks
@@ -191,71 +163,12 @@ def cost_func(x0, *args) -> float:
     penalty = float(args[2])
     # First, construct the joint trajectory from rigid body 1 and weights.
     j = joint_from_markers(*rigid1, *x0)
-    q = 0.0
     all_markers = rigid1 + rigid2
-    # Todo: parallelize?
-    for m in all_markers:
-        q += joint_marker_distance_variance(j, m) + penalty * avg_joint_marker_distance(j, m)
-    
-    q /= len(rigid1) + len(all_markers)
+    q = np.array([marker_pair_distance_variance(j, m) + penalty * avg_marker_pair_distance(j, m) for m in all_markers]).sum()
+    q /= len(all_markers)
     return q
 
 
-# %% C3D file
-def humanize_time(secs):
-    ms = secs % int(secs) * 1000
-    mins, secs = divmod(int(secs), 60)
-    hours, mins = divmod(mins, 60)
-    return "{:02d} hours {:02d} minutes {:02d} seconds ~{:d} milliseconds".format(hours, mins, secs, int(ms))
-
-
-def read_c3d_file(file_path, output_fps=30):
-    """
-    
-    :param file_path:
-    :type file_path: str
-    :param output_fps:
-    :return: marker data
-    """
-    with open(file_path, 'rb') as file_handle:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
-            reader = c3d.Reader(file_handle)
-        marker_labels = reader.point_labels
-        print("Marker Labels:", ",".join(marker_labels))
-        first_frame = reader.first_frame()
-        last_frame = reader.last_frame()
-        print("First Frame:", first_frame, "Last Frame:", last_frame)
-        fps = reader.header.frame_rate
-        print("FPS:", fps)
-        n_frames = last_frame - first_frame + 1
-        total_length = n_frames / fps
-        print("Clip length in total:", humanize_time(total_length))
-        # Extract positions for each frame.
-        pos_array = np.empty([n_frames, len(marker_labels), 3])
-        pos_array.fill(np.NAN)
-        cond_array = np.empty([n_frames, len(marker_labels)])
-        cond_array.fill(np.NAN)
-        print("Reading frames...")
-        for i, points, _ in reader.read_frames():
-            # pos_array[frame, marker], e.g. pos_array[:,11] all frames for 12th marker
-            # points are mirrored/different coordinate system somehow.
-            pos_array[i - first_frame, :, :] = np.vstack([-1.0 * points[:, 0], -1.0 * points[:, 2], -1.0 * points[:, 1]]).T
-            cond_array[i - first_frame, :] = points[:, 3]
-            if n_frames is not None and i - first_frame >= n_frames:
-                break
-        
-        # There might be a lot of frames. To speed up optimization use only a subset.
-        nth_frame = int(fps / output_fps)
-        frames_indices = np.arange(0, n_frames, nth_frame)
-        #scale = 0.001  # convert mm to m
-        pos_subset = pos_array[frames_indices]
-        cond_subset = cond_array[frames_indices]
-        
-        # Todo: handle missing/bad data
-        return pos_subset, cond_subset
-    
-    
 # %% Optimize
 if __name__ == "__main__":
     # Set Data folder path
@@ -267,25 +180,25 @@ if __name__ == "__main__":
     c3d_filepath = os.path.join(data_path, "arm-4-4-4_clean_30fps.c3d")
     out_fps = 30
     markers, conditionals = read_c3d_file(c3d_filepath, output_fps=out_fps)
-    # todo: set marker groups by file/spectral clustering or other
-    markers_rb1 = list()
-    for i in range(4):
-        markers_rb1.append(markers[:, i])
-    markers_rb2 = list()
-    for i in range(4, 8):
-        markers_rb2.append(markers[:, i])
-    markers_rb3 = list()
-    for i in range(8, 12):
-        markers_rb3.append(markers[:, i])
-        
+    # Find marker groups by spectral clustering multiple times using several different samplings.
+    print("Finding rigid bodies from marker trajectories through spectral clustering...")
+    n_samples = 10
+    clusters = [compute_cluster(markers, min_groups=3, max_groups=3) for i in range(n_samples)]
+    marker_groups = best_groups_from_clusters(clusters)
+    # Put together marker data according to groups.
+    # List of rigid bodies that contain a list of their respective marker data.
+    rigid_bodies = [[markers[:, marker_idx] for marker_idx in group] for group in marker_groups]
+    
     # Todo: check co-planarity/collinearity
-        
+    
     x0 = np.array([1.0, 1.0, 1.0])  # initial lambda weights.
-    optim_rb_sets = [(markers_rb1, markers_rb2), (markers_rb2, markers_rb3)]
+    rb_pairs_indices = list(combinations(range(len(marker_groups)), 2))
+    # Replace indices by actual rigid body marker collection.
+    rb_pairs = [(rigid_bodies[idx[0]], rigid_bodies[idx[1]]) for idx in rb_pairs_indices]
     points = list()
-    for rb_set in optim_rb_sets:
+    for rb_set in rb_pairs:
         print("\nOptimizing...")
-        solution = minimize(cost_func, x0, args=(*rb_set, 0.2))
+        solution = minimize(cost_func, x0, args=(*rb_set, 0.2))  # Adjust: penalty factor on average distance.
         if solution.success:
             # Extract estimated parameters
             est_lambda1 = solution.x[0]
