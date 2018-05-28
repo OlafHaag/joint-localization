@@ -32,6 +32,7 @@ in CVPR 2005. IEEE Computer Society Conference on, vol. 2, 2005, pp. 1185 vol. 2
 import os
 import warnings
 from itertools import combinations
+from multiprocessing import Pool, freeze_support
 
 import numpy as np
 from scipy.optimize import minimize
@@ -85,7 +86,7 @@ def read_c3d_file(file_path, output_fps=30):
         pos_array.fill(np.NAN)
         cond_array = np.empty([n_frames, len(marker_labels)])
         cond_array.fill(np.NAN)
-        print("Reading frames...")
+        print("Reading frames... ", end="", flush=True)
         for i, points, _ in reader.read_frames():
             # pos_array[frame, marker], e.g. pos_array[:,11] all frames for 12th marker
             # Points are mirrored. Different coordinate system somehow.
@@ -93,13 +94,16 @@ def read_c3d_file(file_path, output_fps=30):
             cond_array[i - first_frame, :] = points[:, 3]
             if n_frames is not None and i - first_frame >= n_frames:
                 break
+        print("Done.")
         
         # There might be a lot of frames. To speed up optimization use only a subset.
+        print("Subsampling frames to {} frames per second... ".format(output_fps), end="", flush=True)
         nth_frame = int(fps / output_fps)
         frames_indices = np.arange(0, n_frames, nth_frame)
         # scale = 0.001  # convert mm to m
         pos_subset = pos_array[frames_indices]
         cond_subset = cond_array[frames_indices]
+        print("Done.")
         
         # Todo: handle missing/bad data
         # The data for a given marker typically contains large errors
@@ -216,6 +220,7 @@ def compute_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups
     :return: {'groups': list of lists with marker indices, 'sum_dev': float}
     :rtype: dict
     """
+    assert sample_nth_frame < len(markers), "Sampling rate exceeds number of frames! No markers to sample."
     # Samples are selected over all possible frames at intervals
     # of one half second, plus or minus a few frames.
     # This jitter ensures that any periodic errors do not affect the segmentation.
@@ -225,6 +230,7 @@ def compute_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups
     affinity = costs.copy()
     np.fill_diagonal(affinity, 1.0)
     affinity = 1 / affinity
+    #print("Commencing self tuning spectral clustering. min: {}, max:{}".format(min_groups, max_groups))
     groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)
     # Sum standard deviation of distances over all marker pairs in each group.
     sum_deviations = np.array([sum_distance_deviations(group, costs) for group in groups]).sum()
@@ -245,24 +251,118 @@ def best_groups_from_clusters(clusters):
     best_idx = np.argmin(std_sums)
     best_groups = clusters[best_idx]['groups']
     print("rigid body groups:", best_groups)
-    print("distances deviation sum:", std_sums[best_idx])
+    print("weighted distances deviation sum:", std_sums[best_idx])
     return best_groups
+
+
+# %% Validation
+def validate(clusters, ground_truth):
+    """Validate if the ground truth is within the clusters.
+
+    :param clusters: sampled clusters
+    :type clusters: list
+    :param ground_truth: list of prior known marker groups.
+    :type ground_truth: list
+    :return: Number of times ground truth was found in clusters.
+    :rtype: int
+    """
+    is_valid = np.array([[group in cluster['groups'] for group in ground_truth] for cluster in clusters])
+    is_valid = is_valid.all(axis=1).sum()
+    return is_valid
     
     
+def process_c3d_file(file_path,
+                     resample_fps=30,
+                     n_clusters=10,
+                     nth_frame=15,
+                     rnd_offset=5,
+                     min_groups=2, max_groups=20,
+                     ground_truth=None):
+    """
+    
+    :param file_path:
+    :param resample_fps:
+    :param n_clusters: Compute this many clusters.
+    :param nth_frame:
+    :param rnd_offset:
+    :param min_groups: Minimum number of rigid bodies to look for.
+    :param max_groups: Maximum number of rigid bodies to look for.
+    :param ground_truth: List of lists of marker indices you'd expect.
+    :type ground_truth: list
+    :return: marker groups
+    :rtype: list
+    """
+    markers, conditionals = read_c3d_file(file_path, output_fps=resample_fps)
+    # Compute clusters in parallel.
+    processes = min(n_clusters, 6)  # Adjust number of processes to your CPU.
+    print('Creating pool with %d processes\n' % processes)
+    with Pool(processes) as pool:
+        print("Computing {} clusters...".format(n_clusters))
+        args = [[markers, nth_frame, 5, min_groups, max_groups]] * n_clusters
+        clusters = pool.starmap(compute_cluster, args)
+    # Make list from generator
+    clusters = list(clusters)
+    marker_groups = best_groups_from_clusters(clusters)
+    if ground_truth:
+        print("Comparing clusters to ground truth... ", end="", flush=True)
+        validated = validate(clusters, ground_truth)
+        print("Done.")
+        print("N ground truth found in {} sampled clusters: {}".format(n_clusters, validated))
+    return marker_groups
+
+
 # %% Optimize
 if __name__ == "__main__":
+    freeze_support()
     # Set Data folder path
     try:
         data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
     except NameError:
         data_path = os.path.join(os.getcwd(), "Data")
 
-    c3d_filepath = os.path.join(data_path, "arm-4-4-4_clean_30fps.c3d")
-    out_fps = 30
-    markers, conditionals = read_c3d_file(c3d_filepath, output_fps=out_fps)
+    file_name = "arm-4-4-4_clean_30fps.c3d"
+    print("\nProcessing file:", file_name)
+    c3d_filepath = os.path.join(data_path, file_name)
+    groups1 = process_c3d_file(c3d_filepath,
+                               resample_fps=30,
+                               n_clusters=10,
+                               nth_frame=15,
+                               min_groups=3,
+                               max_groups=3,
+                               ground_truth=[[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]])
+    
+    # Next case.
+    file_name = "arm-4-2-3_clean_120fps.c3d"
+    print("\nProcessing file:", file_name)
+    c3d_filepath = os.path.join(data_path, file_name)
+    groups2 = process_c3d_file(c3d_filepath,
+                               resample_fps=60,
+                               n_clusters=60,
+                               nth_frame=1,
+                               min_groups=3,
+                               max_groups=3,
+                               ground_truth=[[0, 1, 2, 3], [4, 5], [6, 7, 8]])
 
-    # Rather than using one sampling of frames, find marker groups
-    # by clustering multiple times using several different samplings.
-    n_samples = 10
-    clusters = [compute_cluster(markers, min_groups=3, max_groups=3) for i in range(n_samples)]
-    marker_groups = best_groups_from_clusters(clusters)
+    ''' Takes a long time (> 0.5h).
+    # Next case: full body
+    file_name = "fullbody_44Markers_clean_120fps.c3d"
+    print("\nProcessing file:", file_name)
+    c3d_filepath = os.path.join(data_path, file_name)
+    groups_fullbody = process_c3d_file(c3d_filepath,
+                                       resample_fps=24,
+                                       n_clusters=4,
+                                       nth_frame=12,
+                                       min_groups=15,
+                                       max_groups=20,
+                                       ground_truth=[[0, 1, 2, 3],  # head
+                                                     [4, 5, 6, 7],  # torso
+                                                     [8, 9, 34, 36],  # hips
+                                                     [11, 12, 14], [10, 13, 21],  # shoulders
+                                                     [22], [15],  # upper arms
+                                                     [16, 17], [23, 24],  # lower arms
+                                                     [18, 19, 20], [25, 26, 27],  # hands
+                                                     [33, 35], [37, 43],  # upper legs
+                                                     [31, 32], [38, 39],  # lower legs
+                                                     [28, 29, 30], [40, 41, 42],  # feet
+                                                     ])
+    '''
