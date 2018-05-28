@@ -41,20 +41,30 @@ from stsc import self_tuning_spectral_clustering
 
 
 # %% C3D file
-def humanize_time(secs):
-    ms = secs % int(secs) * 1000
-    mins, secs = divmod(int(secs), 60)
+def humanize_time(seconds):
+    """Convert time in seconds to (better) human readable format.
+    
+    :param seconds: seconds
+    :type seconds: float
+    :return: Human readable time in h:m:s:ms
+    :rtype: str
+    """
+    ms = seconds % int(seconds) * 1000
+    mins, seconds = divmod(int(seconds), 60)
     hours, mins = divmod(mins, 60)
-    return "{:02d} hours {:02d} minutes {:02d} seconds ~{:d} milliseconds".format(hours, mins, secs, int(ms))
+    return "{:02d} hours {:02d} minutes {:02d} seconds ~{:d} milliseconds".format(hours, mins, seconds, int(ms))
 
 
 def read_c3d_file(file_path, output_fps=30):
-    """
+    """Read INTEL format C3D file and return a subsample of marker positions and conditionals.
+    Also prints information about the file content.
 
-    :param file_path:
+    :param file_path: Path to C3D file.
     :type file_path: str
-    :param output_fps:
+    :param output_fps: out sample rate. If the file has 480fps and output_fps is 30, every 16th frame will be sampled.
+    :type output_fps: int
     :return: marker data
+    :rtype: (numpy.ndarray, numpy.ndarray)
     """
     with open(file_path, 'rb') as file_handle:
         with warnings.catch_warnings():
@@ -126,7 +136,7 @@ def sample_marker_positions(markers, delta, rnd_offset):
     return subset
 
 
-# %% Average joint to marker distance.
+# %% Average marker pair distance.
 def avg_marker_pair_distance(marker1, marker2) -> float:
     """Average distance between a pair of markers over all frames.
 
@@ -141,7 +151,7 @@ def avg_marker_pair_distance(marker1, marker2) -> float:
     return avg
 
 
-# %% variance in distance for a marker pair.
+# %% Variance in distance for a marker pair.
 def marker_pair_distance_variance(marker1, marker2) -> float:
     """Computes variance in marker-marker distance.
 
@@ -159,7 +169,7 @@ def marker_pair_distance_variance(marker1, marker2) -> float:
 
 # %% Cost Matrix
 def cost_matrix(markers_sample):
-    """Standard deviation in distance between marker pairs.
+    """Standard deviation (squared) in distance between marker pairs.
     Define a cost matrix, A, such that element A ij is the
     standard deviation in distance between markers i and j for a
     particular sampling of frames.
@@ -179,7 +189,7 @@ def cost_matrix(markers_sample):
     # Set each value for a marker paired with itself to zero.
     np.fill_diagonal(matrix, 0.0)
     # Compute variance for each pair.
-    for pair in pairs:  # Todo: Parallelize?
+    for pair in pairs:
         variance = marker_pair_distance_variance(markers_sample[:, pair[0]], markers_sample[:, pair[1]])
         matrix[pair, pair[::-1]] = variance
         #print("{} var={}, std={}".format(pair, variance, np.sqrt(variance)))
@@ -196,12 +206,22 @@ def sum_distance_deviations(group, cost_matrix):
 
 #%% Picking best groups configuration.
 def compute_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
+    """Segements the markers into rigid body groups.
+    
+    :param markers: Marker trajectories
+    :param sample_nth_frame: sample rate for subsampling the marker data (for computational efficiency).
+    :param rnd_frame_offset: semi-randomize regular sampling rate by +/- random max offset to counter periodic errors.
+    :param min_groups: Minimum number of groups to consider.
+    :param max_groups: Maximum number of groups to consider.
+    :return: {'groups': list of lists with marker indices, 'sum_dev': float}
+    :rtype: dict
+    """
     # Samples are selected over all possible frames at intervals
     # of one half second, plus or minus a few frames.
     # This jitter ensures that any periodic errors do not affect the segmentation.
     marker_subset = sample_marker_positions(markers, sample_nth_frame, rnd_frame_offset)
     costs = cost_matrix(marker_subset)
-    # The costs need to be sensibly inverted, so that low costs are close to 1 and high costs close to zero.
+    # The costs need to be sensibly inverted, so that low costs are closer to 1 and high costs close to zero.
     affinity = costs.copy()
     np.fill_diagonal(affinity, 1.0)
     affinity = 1 / affinity
@@ -212,9 +232,15 @@ def compute_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups
 
 
 def best_groups_from_clusters(clusters):
-    # From among these multiple clusterings, select the
-    # one which minimizes the sum standard deviation of distances
-    # over all marker pairs in each group, for all clusterings.
+    """From among the multiple clusterings, select the one which
+    minimizes the sum standard deviation of distances over all
+    marker pairs in each group, for all clusterings.
+    
+    :param clusters: List of dictionaries [{'groups': list, 'sum_dev': float},]
+    :type clusters: list
+    :return: List for marker groups.
+    :rtype: list
+    """
     std_sums = [cluster['sum_dev'] for cluster in clusters]
     best_idx = np.argmin(std_sums)
     best_groups = clusters[best_idx]['groups']
@@ -240,4 +266,3 @@ if __name__ == "__main__":
     n_samples = 10
     clusters = [compute_cluster(markers, min_groups=3, max_groups=3) for i in range(n_samples)]
     marker_groups = best_groups_from_clusters(clusters)
-
