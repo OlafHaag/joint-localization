@@ -190,21 +190,21 @@ if __name__ == "__main__":
     marker_groups = best_groups_from_clusters(clusters)
     # Put together marker data according to groups.
     # List of rigid bodies that contain a list of their respective marker data.
-    rigid_bodies = [[markers[:, marker_idx] for marker_idx in group] for group in marker_groups]
+    rb_trajectories = [[markers[:, marker_idx] for marker_idx in group] for group in marker_groups]
     
     # Todo: check co-planarity/collinearity
     
     x0 = np.array([1.0, 1.0, 1.0])  # initial lambda weights.
-    rb_pairs_indices = list(combinations(range(len(marker_groups)), 2))
+    rb_idx_pairs = list(combinations(range(len(marker_groups)), 2))
     # Map actual rigid body marker collection to index pairs.
-    rb_pairs = dict([(idx, (rigid_bodies[idx[0]], rigid_bodies[idx[1]])) for idx in rb_pairs_indices])
+    rb_pairs = dict([(idx_pair, (rb_trajectories[idx_pair[0]], rb_trajectories[idx_pair[1]])) for idx_pair in rb_idx_pairs])
     # Create a NxN matrix to hold edge weights for a fully connected graph of rigid bodies.
-    edge_weights = np.zeros((len(rb_pairs_indices), len(rb_pairs_indices)))
+    edge_weights = np.zeros((len(rb_idx_pairs), len(rb_idx_pairs)))
     # Create dictionary to hold new trajectory for each point connecting a rigid body pair.
     points = dict()
     # Todo: parallelize?
     for idx_pair, rb_set in rb_pairs.items():
-        print("\nOptimizing rigid body pair {}...".format(idx_pair))
+        print("\nOptimizing connection for marker groups {} & {}.".format(marker_groups[idx_pair[0]], marker_groups[idx_pair[1]]))
         solution = minimize(cost_func, x0, args=(*rb_set, 0.2))  # Adjust: penalty factor on average distance.
         if solution.success:
             # Extract estimated parameters
@@ -227,16 +227,22 @@ if __name__ == "__main__":
     # Which rigid bodies are connected?
     tree_csr = minimum_spanning_tree(rb_graph)
     print("Minimum spanning tree:\n", tree_csr.toarray().astype(float))
-    # Todo: relate non-zero data to marker_groups.
+    # Relate non-zero data in minimum spanning tree to marker_groups.
     connected_rb_indices = np.transpose(np.nonzero(tree_csr.toarray())).tolist()
     connected_rb_indices = [tuple(idx) for idx in connected_rb_indices]
-    
+    for idx in connected_rb_indices:
+        print("marker group {} is connected to group {}".format(marker_groups[idx[0]], marker_groups[idx[1]]))
+        
     # Write joint trajectories to file. Write only those points that connect rigid bodies in minimum spanning tree.
     mst_points = np.array([trajectory for idx, trajectory in points.items() if idx in connected_rb_indices])
     writer = c3d.Writer(point_rate=float(out_fps))
     for i in range(mst_points.shape[1]):
         writer.add_frames([(mst_points[:, i], np.array([[]]))])
-    with open(os.path.join(data_path, 'test.c3d'), 'wb') as file_handle:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
-            writer.write(file_handle)
+    try:
+        print("Saving trajectories to {}".format(os.path.join(data_path, 'test.c3d')))
+        with open(os.path.join(data_path, 'test.c3d'), 'wb') as file_handle:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
+                writer.write(file_handle)
+    except IOError as e:
+        print("Failed to write file. Reason:", e)
