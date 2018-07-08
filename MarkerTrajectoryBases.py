@@ -41,6 +41,8 @@ import numpy as np
 import c3d
 from scipy.optimize import minimize
 from scipy.spatial import distance
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import minimum_spanning_tree
 
 from MarkerGroups import read_c3d_file, avg_marker_pair_distance, marker_pair_distance_variance, compute_cluster, best_groups_from_clusters
 
@@ -183,6 +185,7 @@ if __name__ == "__main__":
     # Find marker groups by spectral clustering multiple times using several different samplings.
     print("Finding rigid bodies from marker trajectories through spectral clustering...")
     n_samples = 10
+    # Todo: parallelize.
     clusters = [compute_cluster(markers, min_groups=3, max_groups=3) for i in range(n_samples)]
     marker_groups = best_groups_from_clusters(clusters)
     # Put together marker data according to groups.
@@ -193,32 +196,47 @@ if __name__ == "__main__":
     
     x0 = np.array([1.0, 1.0, 1.0])  # initial lambda weights.
     rb_pairs_indices = list(combinations(range(len(marker_groups)), 2))
-    # Replace indices by actual rigid body marker collection.
-    rb_pairs = [(rigid_bodies[idx[0]], rigid_bodies[idx[1]]) for idx in rb_pairs_indices]
-    points = list()
-    for rb_set in rb_pairs:
-        print("\nOptimizing...")
+    # Map actual rigid body marker collection to index pairs.
+    rb_pairs = dict([(idx, (rigid_bodies[idx[0]], rigid_bodies[idx[1]])) for idx in rb_pairs_indices])
+    # Create a NxN matrix to hold edge weights for a fully connected graph of rigid bodies.
+    edge_weights = np.zeros((len(rb_pairs_indices), len(rb_pairs_indices)))
+    # Create dictionary to hold new trajectory for each point connecting a rigid body pair.
+    points = dict()
+    # Todo: parallelize?
+    for idx_pair, rb_set in rb_pairs.items():
+        print("\nOptimizing rigid body pair {}...".format(idx_pair))
         solution = minimize(cost_func, x0, args=(*rb_set, 0.2))  # Adjust: penalty factor on average distance.
         if solution.success:
             # Extract estimated parameters
             est_lambda1 = solution.x[0]
             est_lambda2 = solution.x[1]
             est_lambda3 = solution.x[2]
+            # Use cost as edge weight for computing the minimum spanning tree.
+            edge_weights[idx_pair[0], idx_pair[1]] = solution.fun
             print("Cost Q:", solution.fun)
             print("number of iterations:", solution.nit)
             print("Estimated weight parameters:\n1={}\n2={}\n3={}".format(est_lambda1, est_lambda2, est_lambda3))
             j = joint_from_markers(*rb_set[0], est_lambda1, est_lambda2, est_lambda3)
             point = np.hstack((j, np.zeros((j.shape[0], 2), dtype=j.dtype)))
-            points.append(point)
+            points[idx_pair] = point
         else:
             print("ERROR: Optimization was not successful!")
+    # Make graph from edge weights
+    rb_graph = csr_matrix(edge_weights)
+    print("\nFully connected graph:\n", rb_graph.toarray())
+    # Which rigid bodies are connected?
+    tree_csr = minimum_spanning_tree(rb_graph)
+    print("Minimum spanning tree:\n", tree_csr.toarray().astype(float))
+    # Todo: relate non-zero data to marker_groups.
+    connected_rb_indices = np.transpose(np.nonzero(tree_csr.toarray())).tolist()
+    connected_rb_indices = [tuple(idx) for idx in connected_rb_indices]
     
-    # Write joint trajectories to file.
-    points = np.array(points)
+    # Write joint trajectories to file. Write only those points that connect rigid bodies in minimum spanning tree.
+    mst_points = np.array([trajectory for idx, trajectory in points.items() if idx in connected_rb_indices])
     writer = c3d.Writer(point_rate=float(out_fps))
-    for i in range(points.shape[1]):
-        writer.add_frames([(points[:, i], np.array([[]]))])
-    with open(os.path.join(data_path, 'test.c3d'), 'wb') as h:
+    for i in range(mst_points.shape[1]):
+        writer.add_frames([(mst_points[:, i], np.array([[]]))])
+    with open(os.path.join(data_path, 'test.c3d'), 'wb') as file_handle:
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
-            writer.write(h)
+            writer.write(file_handle)
