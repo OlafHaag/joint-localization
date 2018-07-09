@@ -36,6 +36,7 @@ from multiprocessing import Pool, freeze_support
 
 import numpy as np
 from scipy.optimize import minimize
+from sklearn.metrics.pairwise import euclidean_distances
 import c3d
 
 from stsc import self_tuning_spectral_clustering
@@ -141,6 +142,7 @@ def sample_marker_positions(markers, delta, rnd_offset):
 
 
 # %% Average marker pair distance.
+# Todo: Make obsolete in MarkerTrajectoryBases.py cost_func
 def avg_marker_pair_distance(marker1, marker2) -> float:
     """Average distance between a pair of markers over all frames.
 
@@ -173,7 +175,7 @@ def marker_pair_distance_variance(marker1, marker2) -> float:
 
 # %% Cost Matrix
 def cost_matrix(markers_sample):
-    """Standard deviation (squared) in distance between marker pairs.
+    """Standard deviation in distance between marker pairs.
     Define a cost matrix, A, such that element A ij is the
     standard deviation in distance between markers i and j for a
     particular sampling of frames.
@@ -183,27 +185,16 @@ def cost_matrix(markers_sample):
     :return: matrix with standard deviations for markers x markers
     :rtype: numpy.ndarray
     """
-    # Make pairs of markers, no repetitions (AB, but not BA).
-    n_markers = markers_sample.shape[1]
-    marker_indices = [idx for idx in range(n_markers)]
-    pairs = list(combinations(marker_indices, 2))
-    #print("Computing variances in distances for {} marker pairs...".format(len(pairs)))
-    # Create matrix with NxN
-    matrix = np.empty((n_markers, n_markers))
-    # Set each value for a marker paired with itself to zero.
-    np.fill_diagonal(matrix, 0.0)
-    # Compute variance for each pair.
-    for pair in pairs:
-        variance = marker_pair_distance_variance(markers_sample[:, pair[0]], markers_sample[:, pair[1]])
-        matrix[pair, pair[::-1]] = variance
-        #print("{} var={}, std={}".format(pair, variance, np.sqrt(variance)))
-    return matrix
+    distances = np.array([euclidean_distances(x) for x in markers_sample])
+    std_distances = np.std(distances, axis=0)
+    
+    return std_distances
 
 
 def sum_distance_deviations(group, cost_matrix):
     pairs = list(combinations(group, 2))
-    # Sum up variances within the group.
-    # To avoid penalizing large marker groups, the variance within
+    # Sum up standard deviations within the group.
+    # To avoid penalizing large marker groups, the standard deviation within
     # a group is normalized by the number of markers in the group.
     return cost_matrix[list(zip(*pairs))].sum() / len(group)
 
