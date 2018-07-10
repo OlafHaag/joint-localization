@@ -141,38 +141,6 @@ def sample_marker_positions(markers, delta, rnd_offset):
     return subset
 
 
-# %% Average marker pair distance.
-# Todo: Make obsolete in MarkerTrajectoryBases.py cost_func
-def avg_marker_pair_distance(marker1, marker2) -> float:
-    """Average distance between a pair of markers over all frames.
-
-    :param marker1: marker trajectory
-    :type marker1: np.array
-    :param marker2: marker trajectory
-    :type marker2: np.array
-    :return: average distance
-    :rtype: float
-    """
-    avg = np.linalg.norm(marker1 - marker2, axis=1).sum() / len(marker1)  # length of vectors equals number of frames.
-    return avg
-
-
-# %% Variance in distance for a marker pair.
-def marker_pair_distance_variance(marker1, marker2) -> float:
-    """Computes variance in marker-marker distance.
-
-    :param marker1: marker trajectory
-    :type marker1: np.array
-    :param marker2: marker trajectory
-    :type marker2: np.array
-    :return: variance
-    :rtype: float
-    """
-    sig = np.square(np.linalg.norm(marker1 - marker2, axis=1) - avg_marker_pair_distance(marker1, marker2)).sum()
-    sig /= len(marker2)
-    return sig
-
-
 # %% Cost Matrix
 def cost_matrix(markers_sample):
     """Standard deviation in distance between marker pairs.
@@ -191,12 +159,20 @@ def cost_matrix(markers_sample):
     return std_distances
 
 
-def sum_distance_deviations(group, cost_matrix):
-    pairs = list(combinations(group, 2))
-    # Sum up standard deviations within the group.
-    # To avoid penalizing large marker groups, the standard deviation within
-    # a group is normalized by the number of markers in the group.
-    return cost_matrix[list(zip(*pairs))].sum() / len(group)
+def sum_distance_deviations(marker_indices, cost_matrix):
+    """ Sum up standard deviations of distances for given marker indices.
+    To avoid penalizing large marker groups, the standard deviation within
+    a group is normalized by the number of markers in the group.
+    
+    :param marker_indices: marker indices to sum pairwise
+    :type marker_indices: list
+    :param cost_matrix: NxN matrix containing standard deviations of pairwise distances.
+    :type cost_matrix: numpy.ndarray
+    :return: Wighted sum of standard deviations for pairwise distances.
+    :rtype: float
+    """
+    pairs = list(combinations(marker_indices, 2))
+    return cost_matrix[list(zip(*pairs))].sum() / len(marker_indices)
 
 
 #%% Picking best groups configuration.
@@ -222,7 +198,7 @@ def compute_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups
     np.fill_diagonal(affinity, 1.0)
     affinity = 1 / affinity
     #print("Commencing self tuning spectral clustering. min: {}, max:{}".format(min_groups, max_groups))
-    groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)
+    groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)  # FixMe: spectral clustering is way too slow.
     # Sum standard deviation of distances over all marker pairs in each group.
     sum_deviations = np.array([sum_distance_deviations(group, costs) for group in groups]).sum()
     return {'groups': groups, 'sum_dev': sum_deviations}

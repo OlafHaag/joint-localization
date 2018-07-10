@@ -33,6 +33,7 @@ Limitations:
 """
 # %% Imports
 import os
+import sys
 from math import factorial
 from itertools import combinations
 import warnings
@@ -41,10 +42,11 @@ import numpy as np
 import c3d
 from scipy.optimize import minimize
 from scipy.spatial import distance
+from sklearn.metrics.pairwise import paired_distances
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
 
-from MarkerGroups import read_c3d_file, avg_marker_pair_distance, marker_pair_distance_variance, compute_cluster, best_groups_from_clusters
+from MarkerGroups import read_c3d_file, compute_cluster, best_groups_from_clusters
 
 
 # %% auxiliary marker
@@ -53,37 +55,32 @@ def auxiliary_marker(m1, m2, m3):
     Works for single frame or whole trajectory.
     
     :param m1: marker 1
-    :type m1: np.array
+    :type m1: numpy.ndarray
     :param m2: marker 2
-    :type m2: np.array
+    :type m2: numpy.ndarray
     :param m3: marker 3
-    :type m3: np.array
+    :type m3: numpy.ndarray
     :return: auxiliary marker
-    :rtype: np.array
+    :rtype: numpy.ndarray
     """
     m4 = m3 + np.cross(m1 - m3, m2 - m3)
     return m4
 
 
 # %% joint location
-def joint_from_markers(m1, m2, m3, m4, par1, par2, par3):
-    """Joint location estimate by linear combination of marker base vectors
+def joint_from_markers(marker_trajectories, weights):
+    """Joint location estimate by linear combination of marker base vectors.
     
-    :param m1: marker 1
-    :type m1: np.array
-    :param m2: marker 2
-    :type m2: np.array
-    :param m3: marker 3
-    :type m3: np.array
-    :param m4: marker 4
-    :type m4: np.array
-    :param par1: weight of marker1
-    :param par2: weight of marker2
-    :param par3: weight of marker3
-    :return:  joint trajectory
-    :rtype: np.array
+    :param marker_trajectories: multidimensional array with 4 marker trajectories.
+    :type marker_trajectories: numpy.ndarray
+    :param weights: weights for markers 1-3
+    :type weights: numpy.ndarray
+    :return: joint trajectory
+    :rtype: numpy.ndarray
     """
-    j = par1 * m1 + par2 * m2 + par3 * m3 + (1 - par1 - par2 - par3) * m4
+    # Add fourth weight and reshape array.
+    weights = np.append(weights, 1 - weights.sum())[:, np.newaxis]
+    j = np.multiply(marker_trajectories, weights).sum(axis=1)
     return j
 
 
@@ -151,23 +148,29 @@ def are_collinear(markers) -> bool:
 
 # %% cost function
 def cost_func(x0, *args) -> float:
-    """
+    """ Cost function to optimize weights from which the best trajectory for a joint is calculated.
     
     :param x0: 3 lambda weights for linear combination of marker vectors to retrieve joint location.
-    :type x0: np.array
-    :param args: markers belonging to rigid body 1 & rigid body 2, distance penalty weight factor.
+    :type x0: numpy.ndarray
+    :param args: marker trajectories matrix,
+                 marker indices belonging to rigid body 1 & rigid body 2, distance penalty weight factor.
     :type args: tuple
     :return: cost
     :rtype: float
     """
-    rigid1 = args[0]
-    rigid2 = args[1]
-    penalty = float(args[2])
+    trajectories = args[0]
+    rigid1_indices = args[1]
+    rigid2_indices = args[2]
+    penalty = float(args[3])
     # First, construct the joint trajectory from rigid body 1 and weights.
-    j = joint_from_markers(*rigid1, *x0)
-    all_markers = rigid1 + rigid2
-    q = np.array([marker_pair_distance_variance(j, m) + penalty * avg_marker_pair_distance(j, m) for m in all_markers]).sum()
-    q /= len(all_markers)
+    j = joint_from_markers(trajectories[:, rigid1_indices, :], x0)
+    all_marker_indices = rigid1_indices + rigid2_indices
+    # Todo: Is there a faster way? Distances of all markers to joint in parallel. Or use n_jobs for speedup?
+    # Then calculate cost q.
+    distances_to_joint = np.array([paired_distances(t, j, n_jobs=-1) for t in np.swapaxes(trajectories[:, all_marker_indices],0,1)])
+    mean_distances = np.mean(distances_to_joint, axis=1)
+    var_distances = np.var(distances_to_joint, axis=1)
+    q = (var_distances + penalty * mean_distances).sum()/len(all_marker_indices)
     return q
 
 
@@ -188,39 +191,43 @@ if __name__ == "__main__":
     # Todo: parallelize.
     clusters = [compute_cluster(markers, min_groups=3, max_groups=3) for i in range(n_samples)]
     marker_groups = best_groups_from_clusters(clusters)
-    # Put together marker data according to groups.
-    # List of rigid bodies that contain a list of their respective marker data.
-    rb_trajectories = [[markers[:, marker_idx] for marker_idx in group] for group in marker_groups]
     
-    # Todo: check co-planarity/collinearity
-    
-    x0 = np.array([1.0, 1.0, 1.0])  # initial lambda weights.
+    # Todo: check co-planarity/collinearity within groups.
+
+    # Generate all possible rigid body pairings using their indices from marker_groups.
     rb_idx_pairs = list(combinations(range(len(marker_groups)), 2))
-    # Map actual rigid body marker collection to index pairs.
-    rb_pairs = dict([(idx_pair, (rb_trajectories[idx_pair[0]], rb_trajectories[idx_pair[1]])) for idx_pair in rb_idx_pairs])
     # Create a NxN matrix to hold edge weights for a fully connected graph of rigid bodies.
-    edge_weights = np.zeros((len(rb_idx_pairs), len(rb_idx_pairs)))
+    edge_weights = np.zeros((len(rb_idx_pairs),) * 2)
     # Create dictionary to hold new trajectory for each point connecting a rigid body pair.
     points = dict()
+    x0 = np.array([1.0, 1.0, 1.0])  # initial lambda weights.
     # Todo: parallelize?
-    for idx_pair, rb_set in rb_pairs.items():
-        print("\nOptimizing connection for marker groups {} & {}.".format(marker_groups[idx_pair[0]], marker_groups[idx_pair[1]]))
-        solution = minimize(cost_func, x0, args=(*rb_set, 0.2))  # Adjust: penalty factor on average distance.
+    for idx_pair in rb_idx_pairs:
+        rb1_marker_indices = marker_groups[idx_pair[0]]
+        rb2_marker_indices = marker_groups[idx_pair[1]]
+        print("\nOptimizing connection for marker groups {} & {}.".format(rb1_marker_indices, rb2_marker_indices))
+        solution = minimize(cost_func, x0, args=(markers,             # trajectories for all markers.
+                                                 rb1_marker_indices,  # marker indices belonging to rigid body
+                                                 rb2_marker_indices,  # marker indices belonging to rigid body
+                                                 0.2))                # Adjust: penalty factor on average distance.
         if solution.success:
             # Extract estimated parameters
-            est_lambda1 = solution.x[0]
-            est_lambda2 = solution.x[1]
-            est_lambda3 = solution.x[2]
+            final_weights = solution.x
             # Use cost as edge weight for computing the minimum spanning tree.
             edge_weights[idx_pair[0], idx_pair[1]] = solution.fun
             print("Cost Q:", solution.fun)
             print("number of iterations:", solution.nit)
-            print("Estimated weight parameters:\n1={}\n2={}\n3={}".format(est_lambda1, est_lambda2, est_lambda3))
-            j = joint_from_markers(*rb_set[0], est_lambda1, est_lambda2, est_lambda3)
-            point = np.hstack((j, np.zeros((j.shape[0], 2), dtype=j.dtype)))
+            print("Estimated weight parameters: {}".format(final_weights))
+            # Calculate joint trajectory with final weights.
+            joint_trajectory = joint_from_markers(markers[:, rb1_marker_indices, :], solution.x)
+            # Add columns for residuals and camera contribution.
+            point = np.hstack((joint_trajectory, np.zeros((joint_trajectory.shape[0], 2), dtype=joint_trajectory.dtype)))
             points[idx_pair] = point
         else:
             print("ERROR: Optimization was not successful!")
+    if not edge_weights.any():
+        print("No connections could be found between marker groups.")
+        sys.exit()
     # Make graph from edge weights
     rb_graph = csr_matrix(edge_weights)
     print("\nFully connected graph:\n", rb_graph.toarray())
