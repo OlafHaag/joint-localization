@@ -37,6 +37,8 @@ import sys
 from math import factorial
 from itertools import combinations
 import warnings
+from multiprocessing import Pool, freeze_support
+import time
 
 import numpy as np
 import c3d
@@ -46,7 +48,7 @@ from sklearn.metrics.pairwise import paired_distances
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
 
-from MarkerGroups import read_c3d_file, compute_cluster, best_groups_from_clusters
+from MarkerGroups import read_c3d_file, compute_cluster, best_groups_from_clusters, validate
 
 
 # %% auxiliary marker
@@ -174,23 +176,96 @@ def cost_func(x0, *args) -> float:
     return q
 
 
-# %% Optimize
-if __name__ == "__main__":
-    # Set Data folder path
-    try:
-        data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
-    except NameError:
-        data_path = os.path.join(os.getcwd(), "Data")
+def get_marker_groups(markers,
+                      n_clusters=10,
+                      n_processes=0,
+                      nth_frame=15,
+                      rnd_offset=5,
+                      min_groups=2,
+                      max_groups=20,
+                      ground_truth=None):
+    """ Find marker groups by spectral clustering multiple times using several different samplings.
+
+    :param markers: trajectories
+    :param n_clusters: Compute this many clusters.
+    :param n_processes: Number of Python subprocesses to start for cluster computation.
+    :param nth_frame: sample every n-th frame
+    :param rnd_offset: offset n-th frame by random range in -/+ rnd_rnd_offset
+    :param min_groups: Minimum number of rigid bodies to look for.
+    :param max_groups: Maximum number of rigid bodies to look for.
+    :param ground_truth: List of lists of marker indices you'd expect.
+    :type ground_truth: list
+    :return: marker groups
+    :rtype: list
+    """
+    # FixMe: ValueError: shapes (12,12) and (13,13) not aligned: 12 (dim 1) != 13 (dim 0)
+    if n_processes > 0:
+        processes = min(n_clusters, n_processes)
+        print('Creating pool with %d processes\n' % processes)
+        with Pool(processes) as pool:
+            print("Computing {} clusters...".format(n_clusters))
+            args = [[markers, nth_frame, rnd_offset, min_groups, max_groups]] * n_clusters
+            clusters = pool.starmap(compute_cluster, args)
+        # Make list from generator
+        clusters = list(clusters)
+    else:
+        # Alternative serial computation. Faster for small files without multiprocess overhead..
+        clusters = [compute_cluster(markers, min_groups=min_groups, max_groups=max_groups) for i in range(n_clusters)]
+    groups = best_groups_from_clusters(clusters)
     
-    c3d_filepath = os.path.join(data_path, "arm-4-4-4_clean_30fps.c3d")
-    out_fps = 30
-    markers, conditionals = read_c3d_file(c3d_filepath, output_fps=out_fps)
-    # Find marker groups by spectral clustering multiple times using several different samplings.
+    if ground_truth:
+        print("Comparing clusters to ground truth... ", end="", flush=True)
+        validated = validate(clusters, ground_truth)
+        print("Done.")
+        print("N ground truth found in {} sampled clusters: {}".format(n_clusters, validated))
+    return groups
+
+
+def get_rigid_body_connections(edge_weights):
+    """ Compute minimum spanning tree from edge weight matrix and return found index pairs."""
+    # Make graph from edge weights
+    rb_graph = csr_matrix(edge_weights)
+    print("\nFully connected graph:\n", rb_graph.toarray())
+    # Which rigid bodies are connected?
+    tree_csr = minimum_spanning_tree(rb_graph)
+    print("Minimum spanning tree:\n", tree_csr.toarray().astype(float))
+    # Relate non-zero data in minimum spanning tree to marker_groups.
+    connections = np.transpose(np.nonzero(tree_csr.toarray())).tolist()
+    connections = [tuple(idx) for idx in connections]
+    return connections
+
+
+def save_to_c3d_file(file_path, points, fps=30):
+    writer = c3d.Writer(point_rate=float(fps))
+    for i in range(points.shape[1]):
+        writer.add_frames([(points[:, i], np.array([[]]))])
+    try:
+        with open(file_path, 'wb') as file_handle:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
+                writer.write(file_handle)
+    except IOError as e:
+        print("Failed to write file. Reason:", e)
+        
+
+def process_c3d_file(in_file,
+                     out_fps=30,
+                     n_clusters=10,
+                     n_cluster_processes=4,
+                     min_rigid_bodies=3,
+                     max_rigid_bodies=20):
+    """ Compute rigid bodies and their joint trajectories for C3D file and save them to file.
+    :param n_cluster_processes: Adjust number of processes to your CPU and data size. 0 = no multiprocessing.
+    """
+    print("Processing file:", in_file)
+    t0 = time.time()
+    markers, conditionals = read_c3d_file(in_file, output_fps=out_fps)
     print("Finding rigid bodies from marker trajectories through spectral clustering...")
-    n_samples = 10
-    # Todo: parallelize.
-    clusters = [compute_cluster(markers, min_groups=3, max_groups=3) for i in range(n_samples)]
-    marker_groups = best_groups_from_clusters(clusters)
+    marker_groups = get_marker_groups(markers,
+                                      n_clusters=n_clusters,
+                                      n_processes=n_cluster_processes,
+                                      min_groups=min_rigid_bodies,
+                                      max_groups=max_rigid_bodies)
     
     # Todo: check co-planarity/collinearity within groups.
 
@@ -228,28 +303,33 @@ if __name__ == "__main__":
     if not edge_weights.any():
         print("No connections could be found between marker groups.")
         sys.exit()
-    # Make graph from edge weights
-    rb_graph = csr_matrix(edge_weights)
-    print("\nFully connected graph:\n", rb_graph.toarray())
-    # Which rigid bodies are connected?
-    tree_csr = minimum_spanning_tree(rb_graph)
-    print("Minimum spanning tree:\n", tree_csr.toarray().astype(float))
-    # Relate non-zero data in minimum spanning tree to marker_groups.
-    connected_rb_indices = np.transpose(np.nonzero(tree_csr.toarray())).tolist()
-    connected_rb_indices = [tuple(idx) for idx in connected_rb_indices]
+    
+    connected_rb_indices = get_rigid_body_connections(edge_weights)
     for idx in connected_rb_indices:
         print("marker group {} is connected to group {}".format(marker_groups[idx[0]], marker_groups[idx[1]]))
         
     # Write joint trajectories to file. Write only those points that connect rigid bodies in minimum spanning tree.
     mst_points = np.array([trajectory for idx, trajectory in points.items() if idx in connected_rb_indices])
-    writer = c3d.Writer(point_rate=float(out_fps))
-    for i in range(mst_points.shape[1]):
-        writer.add_frames([(mst_points[:, i], np.array([[]]))])
+    out_file_path = in_file[:-4] + '-joints.c3d'
+    print("Saving trajectories to {}".format(out_file_path))
+    save_to_c3d_file(out_file_path, mst_points, out_fps)
+    print("elapsed time: {} seconds".format(time.time()-t0))
+
+
+# %% Optimize
+if __name__ == "__main__":
+    freeze_support()
+
+    # Set Data folder path
     try:
-        print("Saving trajectories to {}".format(os.path.join(data_path, 'test.c3d')))
-        with open(os.path.join(data_path, 'test.c3d'), 'wb') as file_handle:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
-                writer.write(file_handle)
-    except IOError as e:
-        print("Failed to write file. Reason:", e)
+        data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
+    except NameError:
+        data_path = os.path.join(os.getcwd(), "Data")
+    
+    c3d_filepath = os.path.join(data_path, "arm-4-4-4_clean_30fps.c3d")
+    process_c3d_file(c3d_filepath,
+                     out_fps=30,
+                     n_clusters=10,
+                     n_cluster_processes=0,  # No multiprocessing. Takes twice as long.
+                     min_rigid_bodies=3,
+                     max_rigid_bodies=3)
