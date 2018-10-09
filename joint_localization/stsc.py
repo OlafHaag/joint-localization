@@ -7,7 +7,7 @@ import numpy as np
 from functools import reduce
 from scipy.optimize import minimize
 
-from stsc_ulti import affinity_to_lap_to_eig, reformat_result, get_min_max
+from joint_localization.stsc_ulti import affinity_to_lap_to_eig, reformat_result, get_min_max
 
 
 def generate_Givens_rotation(i, j, theta, size):
