@@ -33,6 +33,7 @@ import os
 import warnings
 from itertools import combinations
 from multiprocessing import Pool, freeze_support
+import argparse
 
 import numpy as np
 from sklearn.metrics.pairwise import euclidean_distances
@@ -243,71 +244,99 @@ def validate(clusters, ground_truth):
     return is_valid
     
     
-def process_c3d_file(file_path,
-                     resample_fps=30,
-                     n_clusters=10,
-                     nth_frame=15,
-                     rnd_offset=5,
-                     min_groups=2, max_groups=20,
-                     ground_truth=None):
-    """
+def group_markers_stsc(marker_trajectories,
+                       n_clusters=10,
+                       nth_frame=15,
+                       rnd_offset=5,
+                       min_groups=2, max_groups=20):
+    """Find groups of markers by self-tuning spectral clustering.
     
-    :param file_path:
-    :param resample_fps:
+    :param marker_trajectories: Marker trajectories
     :param n_clusters: Compute this many clusters.
     :param nth_frame:
     :param rnd_offset:
     :param min_groups: Minimum number of rigid bodies to look for.
     :param max_groups: Maximum number of rigid bodies to look for.
-    :param ground_truth: List of lists of marker indices you'd expect.
-    :type ground_truth: list
     :return: marker groups
     :rtype: list
     """
-    markers, conditionals = read_c3d_file(file_path, output_fps=resample_fps)
     # Compute clusters in parallel.
-    processes = min(n_clusters, 6)  # Adjust number of processes to your CPU.
-    print('Creating pool with %d processes\n' % processes)
+    processes = min(n_clusters, 4)  # Adjust number of processes to your CPU.
+    print("Creating pool with {} processes\n".format(processes))
     with Pool(processes) as pool:
         print("Computing {} clusters...".format(n_clusters))
-        args = [[markers, nth_frame, 5, min_groups, max_groups]] * n_clusters
+        args = [[marker_trajectories, nth_frame, rnd_offset, min_groups, max_groups]] * n_clusters
         clusters = pool.starmap(compute_stsc_cluster, args)
-    # Make list from generator
+    # Make list from generator.
     clusters = list(clusters)
     marker_groups = best_groups_from_clusters(clusters)
+    # Todo: Move validation to tests.
+    """
     if ground_truth:
         print("Comparing clusters to ground truth... ", end="", flush=True)
         validated = validate(clusters, ground_truth)
         print("Done.")
         print("N ground truth found in {} sampled clusters: {}".format(n_clusters, validated))
+    """
     return marker_groups
 
 
-# %% Optimize
+def group_markers_kmeans(marker_trajectories, k):
+    """Find groups of markers by k-means clustering.
+    
+    :param marker_trajectories:
+    :param k: Number of clusters to fit markers to.
+    :return: marker groups
+    :rtype: list
+    """
+    raise NotImplementedError
+
+
+def assign_labels_to_groups(marker_labels, groups):
+    labeled_groups = {k: [marker_labels[idx] for idx in group] for k, group in enumerate(groups)}
+    return labeled_groups
+
+
 if __name__ == "__main__":
     freeze_support()
-    # Set Data folder path
-    try:
-        data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
-    except NameError:
-        data_path = os.path.join(os.getcwd(), "Data")
+    parser = argparse.ArgumentParser(
+        prog=__file__,
+        description="""Find groups of markers in C3D file which behave like rigid bodies.""",
+        formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("-v", "--ver", action='version', version='%(prog)s 0.1a')
+    parser.add_argument("-m", "--method", type=str, choices=['spectral', 'k-means'],
+                        default="spectral", help="Method to use for clustering.")
+    parser.add_argument("-k", type=int, default=17, help="Desired number of groups.")
+    parser.add_argument("input.c3d", type=str, help="C3D file (Intel format) with marker data.")
+    args = vars(parser.parse_args())
+    c3d_filepath = args['input.c3d']
+    k_groups = args['k']
+    cluster_method = args['method']
 
-    file_name = "arm-4-4-4_clean_30fps.c3d"
-    print("\nProcessing file:", file_name)
-    c3d_filepath = os.path.join(data_path, file_name)
-    groups1 = process_c3d_file(c3d_filepath,
-                               resample_fps=30,
-                               n_clusters=10,
-                               nth_frame=15,
-                               min_groups=3,
-                               max_groups=3,
-                               ground_truth=[[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]])
+    labels, markers, conditionals = read_c3d_file(c3d_filepath, output_fps=30)
     
+    if cluster_method == 'spectral':
+        groups_indices = group_markers_stsc(markers,
+                                            n_clusters=10,
+                                            nth_frame=15,
+                                            min_groups=k_groups,
+                                            max_groups=k_groups)
+    elif cluster_method == 'k-means':
+        groups_indices = group_markers_kmeans(markers, k_groups)
+    
+    # Assign IDs back to labels.
+    groups_labeled = assign_labels_to_groups(labels, groups_indices)
+    print("Grouping of markers by labels:")
+    for group_idx, marker_labels in groups_labeled.items():
+        print("Group {}: {}".format(group_idx, ", ".join(marker_labels)))
+    
+    
+    # Todo: Move to tests
+    #ground_truth=[[0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]])
+    '''
     # Next case.
     file_name = "arm-4-2-3_clean_120fps.c3d"
-    print("\nProcessing file:", file_name)
-    c3d_filepath = os.path.join(data_path, file_name)
-    groups2 = process_c3d_file(c3d_filepath,
+    groups2 = group_markers_stsc(c3d_filepath,
                                resample_fps=60,
                                n_clusters=60,
                                nth_frame=1,
@@ -315,12 +344,12 @@ if __name__ == "__main__":
                                max_groups=3,
                                ground_truth=[[0, 1, 2, 3], [4, 5], [6, 7, 8]])
 
-    ''' Takes a long time (> 0.5h).
+    # Takes a long time (> 0.5h).
     # Next case: full body
     file_name = "fullbody_44Markers_clean_120fps.c3d"
     print("\nProcessing file:", file_name)
     c3d_filepath = os.path.join(data_path, file_name)
-    groups_fullbody = process_c3d_file(c3d_filepath,
+    groups_fullbody = group_markers_stsc(c3d_filepath,
                                        resample_fps=24,
                                        n_clusters=4,
                                        nth_frame=12,
