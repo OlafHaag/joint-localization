@@ -259,7 +259,7 @@ def process_c3d_file(in_file,
     """
     print("Processing file:", in_file)
     t0 = time.time()
-    markers, conditionals = read_c3d_file(in_file, output_fps=out_fps)
+    labels, markers, conditionals = read_c3d_file(in_file, output_fps=out_fps)
     print("Finding rigid bodies from marker trajectories through spectral clustering...")
     marker_groups = get_marker_groups(markers,
                                       n_clusters=n_clusters,
