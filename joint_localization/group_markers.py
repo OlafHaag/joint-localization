@@ -65,56 +65,62 @@ def read_c3d_file(file_path, output_fps=30):
     :param output_fps: out sample rate. If the file has 480fps and output_fps is 30, every 16th frame will be sampled.
     :type output_fps: int
     :return: marker data
-    :rtype: (numpy.ndarray, numpy.ndarray)
+    :rtype: (list, numpy.ndarray, numpy.ndarray)
     """
-    with open(file_path, 'rb') as file_handle:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
-            reader = c3d.Reader(file_handle)
-        marker_labels = reader.point_labels
-        print("Marker Labels:", ",".join(marker_labels))
-        first_frame = reader.first_frame()
-        last_frame = reader.last_frame()
-        print("First Frame:", first_frame, "Last Frame:", last_frame)
-        fps = reader.header.frame_rate
-        print("FPS:", fps)
-        n_frames = last_frame - first_frame + 1
-        total_length = n_frames / fps
-        print("Clip length in total:", humanize_time(total_length))
-        # Extract positions for each frame.
-        pos_array = np.empty([n_frames, len(marker_labels), 3])
-        pos_array.fill(np.NAN)
-        cond_array = np.empty([n_frames, len(marker_labels)])
-        cond_array.fill(np.NAN)
-        print("Reading frames... ", end="", flush=True)
-        for i, points, _ in reader.read_frames():
-            # pos_array[frame, marker], e.g. pos_array[:,11] all frames for 12th marker
-            # Points are mirrored. Different coordinate system somehow.
-            pos_array[i - first_frame, :, :] = np.vstack([-1.0 * points[:, 0], -1.0 * points[:, 2], -1.0 * points[:, 1]]).T
-            cond_array[i - first_frame, :] = points[:, 3]
-            if n_frames is not None and i - first_frame >= n_frames:
-                break
-        print("Done.")
-        
-        # There might be a lot of frames. To speed up optimization use only a subset.
-        print("Subsampling frames to {} frames per second... ".format(output_fps), end="", flush=True)
-        nth_frame = int(fps / output_fps)
-        frames_indices = np.arange(0, n_frames, nth_frame)
-        # scale = 0.001  # convert mm to m
-        pos_subset = pos_array[frames_indices]
-        cond_subset = cond_array[frames_indices]
-        print("Done.")
-        
-        # Todo: handle missing/bad data
-        # The data for a given marker typically contains large errors
-        # just before the system loses track of that marker and for a
-        # short period after the marker is rediscovered. To eliminate
-        # problems with “ghost” markers and erroneous position data
-        # during those periods, the first few frames are trimmed off
-        # the beginning and end of each marker’s data segment, and any
-        # marker with a maximum number of consecutive frames less than
-        # one half second is ignored.
-        return pos_subset, cond_subset
+    try:
+        with open(file_path, 'rb') as file_handle:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")  # ignore UserWarning: missing parameter ANALOG:DESCRIPTIONS/LABELS
+                reader = c3d.Reader(file_handle)
+    
+            marker_labels = reader.point_labels
+            print("Marker Labels:", ",".join(marker_labels))
+            first_frame = reader.first_frame()
+            last_frame = reader.last_frame()
+            print("First Frame:", first_frame, "Last Frame:", last_frame)
+            fps = reader.header.frame_rate
+            print("FPS:", fps)
+            n_frames = last_frame - first_frame + 1
+            total_length = n_frames / fps
+            print("Clip length in total:", humanize_time(total_length))
+            # Extract positions for each frame.
+            pos_array = np.empty([n_frames, len(marker_labels), 3])
+            pos_array.fill(np.NAN)
+            cond_array = np.empty([n_frames, len(marker_labels)])
+            cond_array.fill(np.NAN)
+            print("Reading frames... ", end="", flush=True)
+            for i, points, _ in reader.read_frames():
+                # pos_array[frame, marker], e.g. pos_array[:,11] all frames for 12th marker
+                # Convert to a mirrored coordinate system.
+                pos_array[i - first_frame, :, :] = np.vstack([-1.0 * points[:, 0],
+                                                              -1.0 * points[:, 2],
+                                                              -1.0 * points[:, 1]]).T
+                cond_array[i - first_frame, :] = points[:, 3]
+                if n_frames is not None and i - first_frame >= n_frames:
+                    break
+    except OSError:
+        print("ERROR: Could not read file.")
+        raise
+    print("Done.")
+    
+    # There might be a lot of frames. To speed up optimization use only a subset.
+    print("Subsampling frames to {} frames per second... ".format(output_fps), end="", flush=True)
+    nth_frame = int(fps / output_fps)
+    frames_indices = np.arange(0, n_frames, nth_frame)
+    pos_subset = pos_array[frames_indices]
+    cond_subset = cond_array[frames_indices]
+    print("Done.")
+    
+    # Todo: handle missing/bad data
+    # The data for a given marker typically contains large errors
+    # just before the system loses track of that marker and for a
+    # short period after the marker is rediscovered. To eliminate
+    # problems with “ghost” markers and erroneous position data
+    # during those periods, the first few frames are trimmed off
+    # the beginning and end of each marker’s data segment, and any
+    # marker with a maximum number of consecutive frames less than
+    # one half second is ignored.
+    return marker_labels, pos_subset, cond_subset
     
     
 def sample_marker_positions(markers, delta, rnd_offset):
