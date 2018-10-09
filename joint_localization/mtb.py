@@ -150,7 +150,7 @@ def are_collinear(markers) -> bool:
 
 # %% cost function
 def cost_func(x0, *args) -> float:
-    """ Cost function to optimize weights from which the best trajectory for a joint is calculated.
+    """Cost function to optimize weights from which the best trajectory for a joint is calculated.
     
     :param x0: 3 lambda weights for linear combination of marker vectors to retrieve joint location.
     :type x0: numpy.ndarray
@@ -184,7 +184,7 @@ def get_marker_groups(markers,
                       min_groups=2,
                       max_groups=20,
                       ground_truth=None):
-    """ Find marker groups by spectral clustering multiple times using several different samplings.
+    """Find marker groups by spectral clustering multiple times using several different samplings.
 
     :param markers: trajectories
     :param n_clusters: Compute this many clusters.
@@ -222,7 +222,7 @@ def get_marker_groups(markers,
 
 
 def get_rigid_body_connections(edge_weights):
-    """ Compute minimum spanning tree from edge weight matrix and return found index pairs."""
+    """Compute minimum spanning tree from edge weight matrix and return found index pairs."""
     # Make graph from edge weights
     rb_graph = csr_matrix(edge_weights)
     print("\nFully connected graph:\n", rb_graph.toarray())
@@ -254,7 +254,7 @@ def process_c3d_file(in_file,
                      n_cluster_processes=4,
                      min_rigid_bodies=3,
                      max_rigid_bodies=20):
-    """ Compute rigid bodies and their joint trajectories for C3D file and save them to file.
+    """Compute rigid bodies and their joint trajectories for C3D file and save them to file.
     :param n_cluster_processes: Adjust number of processes to your CPU and data size. 0 = no multiprocessing.
     """
     print("Processing file:", in_file)
