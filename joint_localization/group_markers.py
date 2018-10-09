@@ -177,7 +177,6 @@ def sum_distance_deviations(marker_indices, cost_matrix):
     :rtype: float
     """
     pairs = list(combinations(marker_indices, 2))
-    return cost_matrix[list(zip(*pairs))].sum() / len(marker_indices)
     return cost_matrix[tuple(zip(*pairs))].sum() / len(marker_indices)
 
 
