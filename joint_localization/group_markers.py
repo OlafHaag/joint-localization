@@ -147,7 +147,7 @@ def sample_marker_positions(markers, delta, rnd_offset):
 
 
 # %% Cost Matrix
-def cost_matrix(markers_sample):
+def get_cost_matrix(markers_sample):
     """Standard deviation in distance between marker pairs.
     Define a cost matrix, A, such that element A ij is the
     standard deviation in distance between markers i and j for a
@@ -197,7 +197,7 @@ def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_g
     # of one half second, plus or minus a few frames.
     # This jitter ensures that any periodic errors do not affect the segmentation.
     marker_subset = sample_marker_positions(markers, sample_nth_frame, rnd_frame_offset)
-    costs = cost_matrix(marker_subset)
+    costs = get_cost_matrix(marker_subset)
     # The costs need to be sensibly inverted, so that low costs are closer to 1 and high costs close to zero.
     affinity = costs.copy()
     np.fill_diagonal(affinity, 1.0)
