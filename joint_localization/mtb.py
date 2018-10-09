@@ -319,14 +319,10 @@ def process_c3d_file(in_file,
 # %% Optimize
 if __name__ == "__main__":
     freeze_support()
-
-    # Set Data folder path
-    try:
-        data_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Data")
-    except NameError:
-        data_path = os.path.join(os.getcwd(), "Data")
+    # Todo: argparse
     
-    c3d_filepath = os.path.join(data_path, "arm-4-4-4_clean_30fps.c3d")
+    # Todo: Move to tests
+    c3d_filepath = "joint_localization/tests/Data/arm-4-4-4_clean_30fps.c3d"
     process_c3d_file(c3d_filepath,
                      out_fps=30,
                      n_clusters=10,
