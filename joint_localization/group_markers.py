@@ -35,11 +35,10 @@ from itertools import combinations
 from multiprocessing import Pool, freeze_support
 
 import numpy as np
-from scipy.optimize import minimize
 from sklearn.metrics.pairwise import euclidean_distances
 import c3d
 
-from stsc import self_tuning_spectral_clustering
+from joint_localization.stsc import self_tuning_spectral_clustering
 
 
 # %% C3D file
@@ -150,7 +149,7 @@ def cost_matrix(markers_sample):
     
     :param markers_sample: positions of markers over a sample of frames.
     :type markers_sample: numpy.ndarray
-    :return: matrix with standard deviations for markers x markers
+    :return: matrix of standard deviations with shape (markers, markers).
     :rtype: numpy.ndarray
     """
     distances = np.array([euclidean_distances(x) for x in markers_sample])
@@ -160,7 +159,7 @@ def cost_matrix(markers_sample):
 
 
 def sum_distance_deviations(marker_indices, cost_matrix):
-    """ Sum up standard deviations of distances for given marker indices.
+    """Sum up standard deviations of distances for given marker indices.
     To avoid penalizing large marker groups, the standard deviation within
     a group is normalized by the number of markers in the group.
     
@@ -176,8 +175,8 @@ def sum_distance_deviations(marker_indices, cost_matrix):
 
 
 #%% Picking best groups configuration.
-def compute_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
-    """Segements the markers into rigid body groups.
+def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
+    """Segments the markers into rigid body groups.
     
     :param markers: Marker trajectories
     :param sample_nth_frame: sample rate for subsampling the marker data (for computational efficiency).
@@ -266,7 +265,7 @@ def process_c3d_file(file_path,
     with Pool(processes) as pool:
         print("Computing {} clusters...".format(n_clusters))
         args = [[markers, nth_frame, 5, min_groups, max_groups]] * n_clusters
-        clusters = pool.starmap(compute_cluster, args)
+        clusters = pool.starmap(compute_stsc_cluster, args)
     # Make list from generator
     clusters = list(clusters)
     marker_groups = best_groups_from_clusters(clusters)

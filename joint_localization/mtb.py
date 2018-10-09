@@ -48,7 +48,7 @@ from sklearn.metrics.pairwise import paired_distances
 from scipy.sparse import csr_matrix
 from scipy.sparse.csgraph import minimum_spanning_tree
 
-from MarkerGroups import read_c3d_file, compute_cluster, best_groups_from_clusters, validate
+from joint_localization.group_markers import read_c3d_file, compute_stsc_cluster, best_groups_from_clusters, validate
 
 
 # %% auxiliary marker
@@ -205,12 +205,12 @@ def get_marker_groups(markers,
         with Pool(processes) as pool:
             print("Computing {} clusters...".format(n_clusters))
             args = [[markers, nth_frame, rnd_offset, min_groups, max_groups]] * n_clusters
-            clusters = pool.starmap(compute_cluster, args)
+            clusters = pool.starmap(compute_stsc_cluster, args)
         # Make list from generator
         clusters = list(clusters)
     else:
         # Alternative serial computation. Faster for small files without multiprocess overhead..
-        clusters = [compute_cluster(markers, min_groups=min_groups, max_groups=max_groups) for i in range(n_clusters)]
+        clusters = [compute_stsc_cluster(markers, min_groups=min_groups, max_groups=max_groups) for i in range(n_clusters)]
     groups = best_groups_from_clusters(clusters)
     
     if ground_truth:
