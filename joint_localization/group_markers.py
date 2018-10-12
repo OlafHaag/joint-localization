@@ -178,6 +178,20 @@ def sum_distance_deviations(marker_indices, cost_matrix):
     return cost_matrix[tuple(zip(*pairs))].sum() / len(marker_indices)
 
 
+def get_affinity_matrix(cost_matrix):
+    """Transforms a cost matrix into affinity by inversion.
+    
+    :param cost_matrix: cost matrix
+    :type cost_matrix: numpy.ndarray
+    :return: Inverted cost matrix.
+    :rtype: numpy.ndarray
+    """
+    affinity = cost_matrix.copy()
+    np.fill_diagonal(affinity, 1.0)
+    affinity = 1 / affinity
+    return affinity
+
+
 def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
     """Segments the markers into rigid body groups.
     
@@ -196,9 +210,7 @@ def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_g
     marker_subset = sample_marker_positions(markers, sample_nth_frame, rnd_frame_offset)
     costs = get_cost_matrix(marker_subset)
     # The costs need to be sensibly inverted, so that low costs are closer to 1 and high costs close to zero.
-    affinity = costs.copy()
-    np.fill_diagonal(affinity, 1.0)
-    affinity = 1 / affinity
+    affinity = get_affinity_matrix(costs)
     #print("Commencing self tuning spectral clustering. min: {}, max:{}".format(min_groups, max_groups))
     groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)  # FixMe: spectral clustering is way too slow.
     # Sum standard deviation of distances over all marker pairs in each group.
