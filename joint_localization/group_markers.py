@@ -36,6 +36,7 @@ import argparse
 
 import numpy as np
 from sklearn.metrics.pairwise import euclidean_distances
+from sklearn.cluster.k_means_ import KMeans  #, MiniBatchKMeans
 import c3d
 
 from joint_localization.stsc import self_tuning_spectral_clustering
@@ -298,7 +299,27 @@ def group_markers_kmeans(marker_trajectories, k):
     :return: marker groups
     :rtype: list
     """
-    raise NotImplementedError
+    num_markers = marker_trajectories.shape[1]
+    if k == 1:
+        print("WARNING: Desired groups is 1. All markers are in one and the same group.")
+        groups = [np.arange(num_markers).tolist()]
+    elif k >= num_markers:
+        print("WARNING: Desired groups are greater or equal number of markers. Each marker is a group on its own.")
+        groups = [[_] for _ in np.arange(num_markers)]
+    elif k >= 2:
+        # FixMe: Doesn't work well on fullbody. Try other metric?
+        cost_matrix = get_cost_matrix(marker_trajectories)
+        affinity = get_affinity_matrix(cost_matrix)
+        kmeans = KMeans(n_clusters=k).fit(affinity)
+        print("Ran k-means clustering with {} iterations.\n"
+              "Sum of squared distances of samples to their closest cluster center: {}".format(kmeans.n_iter_,
+                                                                                               kmeans.inertia_))
+        group_ids = kmeans.labels_
+        marker_indices = group_ids.argsort()
+        groups = [marker_indices[group_ids == group].tolist() for group in np.unique(group_ids)]
+    else:
+        raise ValueError("k must be greater than 0.")
+    return groups
 
 
 def assign_labels_to_groups(marker_labels, groups):
@@ -337,6 +358,6 @@ if __name__ == "__main__":
     
     # Assign IDs back to labels.
     groups_labeled = assign_labels_to_groups(labels, groups_indices)
-    print("Grouping of markers by labels:")
+    print("Grouping of markers by labels (using {} clustering):".format(cluster_method))
     for group_idx, marker_labels in groups_labeled.items():
         print("Group {}: {}".format(group_idx, ", ".join(marker_labels)))
