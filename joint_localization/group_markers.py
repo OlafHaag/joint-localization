@@ -314,13 +314,15 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--method", type=str, choices=['spectral', 'k-means'],
                         default="spectral", help="Method to use for clustering.")
     parser.add_argument("-k", type=int, default=17, help="Desired number of groups.")
+    parser.add_argument("-s", "--subsampling", type=int, default=30, help="Sub-sample frames to lower framerate.")
     parser.add_argument("input.c3d", type=str, help="C3D file (Intel format) with marker data.")
     args = vars(parser.parse_args())
     c3d_filepath = args['input.c3d']
     k_groups = args['k']
+    subsample_fps = args['subsampling']
     cluster_method = args['method']
 
-    labels, markers, conditionals = read_c3d_file(c3d_filepath, output_fps=30)
+    labels, markers, conditionals = read_c3d_file(c3d_filepath, output_fps=subsample_fps)
     
     if cluster_method == 'spectral':
         groups_indices = group_markers_stsc(markers,
