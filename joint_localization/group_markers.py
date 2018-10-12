@@ -236,21 +236,6 @@ def best_groups_from_clusters(clusters):
     return best_groups
 
 
-def validate(clusters, ground_truth):
-    """Validate if the ground truth is within the clusters.
-
-    :param clusters: sampled clusters
-    :type clusters: list
-    :param ground_truth: list of prior known marker groups.
-    :type ground_truth: list
-    :return: Number of times ground truth was found in clusters.
-    :rtype: int
-    """
-    is_valid = np.array([[group in cluster['groups'] for group in ground_truth] for cluster in clusters])
-    is_valid = is_valid.all(axis=1).sum()
-    return is_valid
-    
-    
 def group_markers_stsc(marker_trajectories,
                        n_clusters=10,
                        nth_frame=15,
@@ -286,6 +271,21 @@ def group_markers_stsc(marker_trajectories,
         print("N ground truth found in {} sampled clusters: {}".format(n_clusters, validated))
     """
     return marker_groups
+    
+    
+def validate(clusters, ground_truth):
+    """Validate if the ground truth is within the clusters.
+
+    :param clusters: sampled clusters
+    :type clusters: list
+    :param ground_truth: list of prior known marker groups.
+    :type ground_truth: list
+    :return: Number of times ground truth was found in clusters.
+    :rtype: int
+    """
+    is_valid = np.array([[group in cluster['groups'] for group in ground_truth] for cluster in clusters])
+    is_valid = is_valid.all(axis=1).sum()
+    return is_valid
 
 
 def group_markers_kmeans(marker_trajectories, k):
