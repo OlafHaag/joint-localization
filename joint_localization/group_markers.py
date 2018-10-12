@@ -104,6 +104,8 @@ def read_c3d_file(file_path, output_fps=30):
     
     # There might be a lot of frames. To speed up optimization use only a subset.
     print("Subsampling frames to {} frames per second... ".format(output_fps), end="", flush=True)
+    # Todo: Sanity checks.
+    # Todo: Write tests for sanity checks.
     nth_frame = int(fps / output_fps)
     frames_indices = np.arange(0, n_frames, nth_frame)
     pos_subset = pos_array[frames_indices]
