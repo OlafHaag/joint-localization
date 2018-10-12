@@ -28,7 +28,6 @@ only over a jittered uniform sampling of frames.
 A. Kirk et al., “Skeletal parameter estimation from optical motion capture data,”
 in CVPR 2005. IEEE Computer Society Conference on, vol. 2, 2005, pp. 1185 vol. 2–.
 """
-# %% Imports
 import os
 import warnings
 from itertools import combinations
@@ -42,7 +41,6 @@ import c3d
 from joint_localization.stsc import self_tuning_spectral_clustering
 
 
-# %% C3D file
 def humanize_time(seconds):
     """Convert time in seconds to (better) human readable format.
     
@@ -147,7 +145,6 @@ def sample_marker_positions(markers, delta, rnd_offset):
     return subset
 
 
-# %% Cost Matrix
 def get_cost_matrix(markers_sample):
     """Standard deviation in distance between marker pairs.
     Define a cost matrix, A, such that element A ij is the
@@ -181,7 +178,6 @@ def sum_distance_deviations(marker_indices, cost_matrix):
     return cost_matrix[tuple(zip(*pairs))].sum() / len(marker_indices)
 
 
-#%% Picking best groups configuration.
 def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
     """Segments the markers into rigid body groups.
     
@@ -228,7 +224,6 @@ def best_groups_from_clusters(clusters):
     return best_groups
 
 
-# %% Validation
 def validate(clusters, ground_truth):
     """Validate if the ground truth is within the clusters.
 
