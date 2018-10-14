@@ -28,7 +28,6 @@ only over a jittered uniform sampling of frames.
 A. Kirk et al., “Skeletal parameter estimation from optical motion capture data,”
 in CVPR 2005. IEEE Computer Society Conference on, vol. 2, 2005, pp. 1185 vol. 2–.
 """
-import os
 import warnings
 from itertools import combinations
 from multiprocessing import Pool, freeze_support
@@ -39,7 +38,7 @@ import matplotlib
 import matplotlib.pyplot as plt
 from mpl_toolkits import axes_grid1
 from sklearn.metrics.pairwise import euclidean_distances
-from sklearn.cluster.k_means_ import KMeans  #, MiniBatchKMeans
+from sklearn.cluster.k_means_ import KMeans
 import c3d
 
 from joint_localization.stsc import self_tuning_spectral_clustering
