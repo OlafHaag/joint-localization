@@ -445,34 +445,49 @@ def validate(clusters, ground_truth):
     return is_valid
 
 
-def group_markers_kmeans(marker_trajectories, k):
+def n_groups_sanity_check(group_func):
+    def group_func_check(*args, **kwargs):
+        try:
+            num_markers = args[0].shape[1]
+        except IndexError:
+            raise ValueError("Clustering function must take marker trajectories as the first positional argument.")
+        try:
+            num_groups = args[1]
+        except IndexError:
+            raise ValueError("Clustering function must take number of groups as the second positional argument.")
+        if num_groups == 1:
+            print("WARNING: Desired groups is 1. All markers are in one and the same group.")
+            groups = [np.arange(num_markers).tolist()]
+        elif num_groups >= num_markers:
+            print("WARNING: Desired groups are greater or equal number of markers. Each marker is a group on its own.")
+            groups = [[_] for _ in np.arange(num_markers)]
+        elif num_groups >= 2:
+            groups = group_func(*args, **kwargs)
+        else:
+            raise ValueError("Number of desired groups must be greater than 0.")
+        return groups
+    return group_func_check
+
+
+@n_groups_sanity_check
+def group_markers_kmeans(marker_trajectories, n_groups):
     """Find groups of markers by k-means clustering.
     
     :param marker_trajectories:
-    :param k: Number of clusters to fit markers to.
+    :param n_groups: Number of clusters to fit markers to.
     :return: marker groups
     :rtype: list
     """
-    num_markers = marker_trajectories.shape[1]
-    if k == 1:
-        print("WARNING: Desired groups is 1. All markers are in one and the same group.")
-        groups = [np.arange(num_markers).tolist()]
-    elif k >= num_markers:
-        print("WARNING: Desired groups are greater or equal number of markers. Each marker is a group on its own.")
-        groups = [[_] for _ in np.arange(num_markers)]
-    elif k >= 2:
-        # FixMe: Doesn't work well on fullbody. Try other metric?
-        dist_matrix = get_distance_deviations(marker_trajectories)
-        affinity = get_affinity_matrix(dist_matrix, delta=4.0)
-        kmeans = KMeans(n_clusters=k).fit(affinity)
-        print("Ran k-means clustering with {} iterations.\n"
-              "Sum of squared distances of samples to their closest cluster center: {}".format(kmeans.n_iter_,
-                                                                                               kmeans.inertia_))
-        group_ids = kmeans.labels_
-        marker_indices = group_ids.argsort()
-        groups = [marker_indices[group_ids == group].tolist() for group in np.unique(group_ids)]
-    else:
-        raise ValueError("k must be greater than 0.")
+    # FixMe: Doesn't work well on fullbody. Try other metric?
+    dist_matrix = get_distance_deviations(marker_trajectories)
+    affinity = get_affinity_matrix(dist_matrix, delta=4.0)
+    kmeans = KMeans(n_clusters=n_groups).fit(affinity)
+    print("Ran k-means clustering with {} iterations.\n"
+          "Sum of squared distances of samples to their closest cluster center: {}".format(kmeans.n_iter_,
+                                                                                           kmeans.inertia_))
+    group_ids = kmeans.labels_
+    marker_indices = group_ids.argsort()
+    groups = [marker_indices[group_ids == group].tolist() for group in np.unique(group_ids)]
     return groups
 
 
