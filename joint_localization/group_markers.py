@@ -35,6 +35,9 @@ from multiprocessing import Pool, freeze_support
 import argparse
 
 import numpy as np
+import matplotlib
+import matplotlib.pyplot as plt
+from mpl_toolkits import axes_grid1
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.cluster.k_means_ import KMeans  #, MiniBatchKMeans
 import c3d
@@ -124,28 +127,45 @@ def read_c3d_file(file_path, output_fps=30):
     # one half second is ignored.
     return marker_labels, pos_subset, cond_subset
     
+def subsample_marker_data(marker_data, delta=1, random_offset=0, frames=None):
+    """Returns a subset of the marker data and the frames used to sample.
+    The default parameter values do not subsample.
     
-def sample_marker_positions(markers, delta, rnd_offset):
-    """Returns a subset of the marker data.
-    
-    :param markers: ndarray of marker data
-    :type markers: numpy.ndarray
-    :param delta: number of frames to skip.
+    :param marker_data: Array of marker data (trajectories or conditionals).
+    :type marker_data: numpy.ndarray
+    :param delta: Sample every nth frame.
     :type delta: int
-    :param rnd_offset: maximum offset forward or backward to regular frame sampling.
-    :type rnd_offset: int
-    :return: randomly sampled subset of marker data.
-    :rtype: numpy.ndarray
+    :param random_offset: maximum offset forward or backward to regular frame sampling.
+    :type random_offset: int
+    :param frames: Frame indices to use for subsample. If not None, delta and random_offset are ignored.
+    :type frames: list|numpy.ndarray
+    :return: Tuple(subsample of marker data, indices of frames used).
+    :rtype: (numpy.ndarray, numpy.ndarray)
     """
-    n_frames = len(markers)
-    frames_indices = np.arange(0, n_frames, delta)
-    randomize = lambda x: x + np.random.randint(-rnd_offset, rnd_offset)
-    frames_indices = np.fromiter((randomize(x) for x in frames_indices), frames_indices.dtype)
-    # Make sure indices are valid.
-    frames_indices[np.where(frames_indices < 0)] = 0
-    frames_indices[np.where(frames_indices >= n_frames)] = n_frames - np.random.randint(1, rnd_offset)
-    subset = markers[frames_indices]
-    return subset
+    if delta <= 0:
+        raise ValueError("Delta value for frames subsampling must be > 0!")
+    elif delta <= random_offset:
+        raise ValueError("Delta value for frames subsampling must be greater than random offset.\n"
+                         "Otherwise frame order might get jumbled.")
+    n_frames = marker_data.shape[0]
+    if not frames:
+        frames_indices = np.arange(0, n_frames, delta)
+    else:
+        frames_indices = frames
+    if len(frames_indices) > n_frames:
+        raise ValueError("Number of frames to subsample must be less than number of frames!")
+    
+    if (random_offset == 0) or frames:
+        pass  # Do not change frames_indices.
+    else:
+        randomize = lambda x: x + np.random.randint(-random_offset, random_offset)
+        frames_indices = np.fromiter((randomize(x) for x in frames_indices), frames_indices.dtype)
+        # Make sure indices are valid.
+        frames_indices[np.where(frames_indices < 0)] = 0  # No negative frames.
+        # Do not overshoot.
+        frames_indices[np.where(frames_indices >= n_frames)] = n_frames - np.random.randint(1, random_offset)
+    subset = marker_data[frames_indices]
+    return subset, frames_indices
 
 
 def get_cost_matrix(markers_sample):
@@ -195,10 +215,153 @@ def get_affinity_matrix(cost_matrix):
     return affinity
 
 
-def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
+def heatmap(data, row_labels, col_labels, ax=None,
+            cbar_kw=None, cbarlabel="", **kwargs):
+    """
+    Create a heatmap from a numpy array and two lists of labels.
+
+    Arguments:
+    :param data: A 2D numpy array of shape (N,M)
+    :param row_labels: A list or array of length N with the labels
+                     for the rows
+    :param col_labels: A list or array of length M with the labels
+                     for the columns
+    Optional arguments:
+    :param ax: A matplotlib.axes.Axes instance to which the heatmap
+                     is plotted. If not provided, use current axes or
+                     create a new one.
+    :param cbar_kw: A dictionary with arguments to
+                     :meth:`matplotlib.Figure.colorbar`.
+    :param cbarlabel: The label for the colorbar
+    All other arguments are directly passed on to the imshow call.
+    """
+
+    if cbar_kw is None:
+        cbar_kw = {}
+    if not ax:
+        ax = plt.gca()
+
+    # Plot the heatmap
+    im = ax.imshow(data, **kwargs)
+
+    # Create colorbar
+    cbar = add_colorbar(im, **cbar_kw)
+    cbar.ax.set_ylabel(cbarlabel, rotation=-90, va="bottom")
+
+    # We want to show all ticks...
+    ax.set_xticks(np.arange(data.shape[1]))
+    ax.set_yticks(np.arange(data.shape[0]))
+    # ... and label them with the respective list entries.
+    ax.set_xticklabels(col_labels)
+    ax.set_yticklabels(row_labels)
+
+    # Let the horizontal axes labeling appear on top.
+    ax.tick_params(top=True, bottom=False,
+                   labeltop=True, labelbottom=False)
+
+    # Rotate the tick labels and set their alignment.
+    plt.setp(ax.get_xticklabels(), rotation=-30, ha="right",
+             rotation_mode="anchor")
+
+    # Turn spines off and create white grid.
+    for edge, spine in ax.spines.items():
+        spine.set_visible(False)
+
+    ax.set_xticks(np.arange(data.shape[1]+1)-.5, minor=True)
+    ax.set_yticks(np.arange(data.shape[0]+1)-.5, minor=True)
+    ax.grid(which="minor", color="w", linestyle='-', linewidth=1)
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+    return im, cbar
+
+
+def add_colorbar(im, aspect=20, pad_fraction=0.5, **kwargs):
+    """Add a vertical color bar to an image plot."""
+    divider = axes_grid1.make_axes_locatable(im.axes)
+    width = axes_grid1.axes_size.AxesY(im.axes, aspect=1./aspect)
+    pad = axes_grid1.axes_size.Fraction(pad_fraction, width)
+    current_ax = plt.gca()
+    cax = divider.append_axes("right", size=width, pad=pad)
+    plt.sca(current_ax)
+    return im.axes.figure.colorbar(im, cax=cax, **kwargs)
+
+
+def annotate_heatmap(im, data=None, valfmt="{x:.2f}",
+                     textcolors=None, threshold=None, **textkw):
+    """A function to annotate a heatmap.
+
+    Arguments:
+    :param im: The AxesImage to be labeled.
+    Optional arguments:
+    :param data: Data used to annotate. If None, the image's data is used.
+    :param valfmt:  The format of the annotations inside the heatmap.
+                    This should either use the string format method, e.g.
+                    "$ {x:.2f}", or be a :class:`matplotlib.ticker.Formatter`.
+    :param textcolors:  A list or array of two color specifications. The first is
+                        used for values below a threshold, the second for those above.
+    :param threshold:   Value in data units according to which the colors from
+                        textcolors are applied. If None (the default) uses the
+                        middle of the colormap as separation.
+
+    Further arguments are passed on to the created text labels.
+    """
+
+    if textcolors is None:
+        textcolors = ["black", "white"]
+    if not isinstance(data, (list, np.ndarray)):
+        data = im.get_array()
+
+    # Normalize the threshold to the images color range.
+    if threshold is not None:
+        threshold = im.norm(threshold)
+    else:
+        threshold = im.norm(data.max())/2.
+
+    # Set default alignment to center, but allow it to be
+    # overwritten by textkw.
+    kw = dict(horizontalalignment="center",
+              verticalalignment="center")
+    kw.update(textkw)
+
+    # Get the formatter in case a string is supplied
+    if isinstance(valfmt, str):
+        valfmt = matplotlib.ticker.StrMethodFormatter(valfmt)
+
+    # Loop over the data and create a `Text` for each "pixel".
+    # Change the text's color depending on the data.
+    texts = []
+    for i in range(data.shape[0]):
+        for j in range(data.shape[1]):
+            kw.update(color=textcolors[im.norm(data[i, j]) > threshold])
+            text = im.axes.text(j, i, valfmt(data[i, j], None), **kw)
+            texts.append(text)
+
+    return texts
+    
+
+def show_matrix_plot(matrix, labels, matrix_type='affinity'):
+    """Plot an affinity or cost matrix.
+    
+    :param matrix: NxN Matrix with markers' pairwise cost/affinity.
+    :param labels: marker labels
+    :type labels: list
+    :param matrix_type: Label of color bar and plot title.
+    :type matrix_type: str
+    """
+    size = tuple((int(0.5*x) for x in matrix.shape))
+    fig, ax = plt.subplots(figsize=size)
+    im, cbar = heatmap(matrix, labels, labels, ax=ax,
+                       cmap="tab20b", cbarlabel=matrix_type)
+    texts = annotate_heatmap(im, valfmt="{x:.1f}")
+    fig.tight_layout()
+    plt.title("{} Matrix".format(matrix_type.title()))
+    plt.show()
+    
+    
+def compute_stsc_cluster(marker_trajectories, sample_nth_frame=15, rnd_frame_offset=5, min_groups=2, max_groups=20):
     """Segments the markers into rigid body groups.
     
-    :param markers: Marker trajectories
+    :param marker_trajectories: Marker trajectories
     :param sample_nth_frame: sample rate for subsampling the marker data (for computational efficiency).
     :param rnd_frame_offset: semi-randomize regular sampling rate by +/- random max offset to counter periodic errors.
     :param min_groups: Minimum number of groups to consider.
@@ -206,11 +369,11 @@ def compute_stsc_cluster(markers, sample_nth_frame=15, rnd_frame_offset=5, min_g
     :return: {'groups': list of lists with marker indices, 'sum_dev': float}
     :rtype: dict
     """
-    assert sample_nth_frame < len(markers), "Sampling rate exceeds number of frames! No markers to sample."
+    assert sample_nth_frame < len(marker_trajectories), "Sampling rate exceeds number of frames! No markers to sample."
     # Samples are selected over all possible frames at intervals
     # of one half second, plus or minus a few frames.
     # This jitter ensures that any periodic errors do not affect the segmentation.
-    marker_subset = sample_marker_positions(markers, sample_nth_frame, rnd_frame_offset)
+    marker_subset, _ = subsample_marker_data(marker_trajectories, sample_nth_frame, rnd_frame_offset)
     costs = get_cost_matrix(marker_subset)
     # The costs need to be sensibly inverted, so that low costs are closer to 1 and high costs close to zero.
     affinity = get_affinity_matrix(costs)
