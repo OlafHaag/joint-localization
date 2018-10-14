@@ -196,17 +196,19 @@ def sum_distance_deviations(marker_indices, cost_matrix):
     return cost_matrix[tuple(zip(*pairs))].sum() / len(marker_indices)
 
 
-def get_affinity_matrix(cost_matrix):
-    """Transforms a cost matrix into affinity by inversion.
+def get_affinity_matrix(dist_matrix, delta=4.0):
+    """Transforms a distance matrix into an affinity matrix by applying the Gaussian (RBF, heat) kernel.
     
-    :param cost_matrix: cost matrix
-    :type cost_matrix: numpy.ndarray
-    :return: Inverted cost matrix.
+    :param dist_matrix: Distance matrix, for which 0 means identical elements,
+    and high values means very dissimilar elements.
+    :type dist_matrix: numpy.ndarray
+    :param delta: Width of the Gaussian kernel.
+    :type delta: float
+    :return: Affinity matrix, for which 1 means identical elements,
+    and low values means very dissimilar elements.
     :rtype: numpy.ndarray
     """
-    affinity = cost_matrix.copy()
-    np.fill_diagonal(affinity, 1.0)
-    affinity = 1 / affinity
+    affinity = np.exp(- dist_matrix ** 2 / (2. * delta ** 2))
     return affinity
 
 
@@ -371,7 +373,7 @@ def compute_stsc_cluster(marker_trajectories, sample_nth_frame=15, rnd_frame_off
     marker_subset, _ = subsample_marker_data(marker_trajectories, sample_nth_frame, rnd_frame_offset)
     costs = get_cost_matrix(marker_subset)
     # The costs need to be sensibly inverted, so that low costs are closer to 1 and high costs close to zero.
-    affinity = get_affinity_matrix(costs)
+    affinity = get_affinity_matrix(costs, delta=4.0)
     #print("Commencing self tuning spectral clustering. min: {}, max:{}".format(min_groups, max_groups))
     groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)  # FixMe: spectral clustering is way too slow.
     # Sum standard deviation of distances over all marker pairs in each group.
@@ -460,7 +462,7 @@ def group_markers_kmeans(marker_trajectories, k):
     elif k >= 2:
         # FixMe: Doesn't work well on fullbody. Try other metric?
         cost_matrix = get_cost_matrix(marker_trajectories)
-        affinity = get_affinity_matrix(cost_matrix)
+        affinity = get_affinity_matrix(cost_matrix, delta=4.0)
         kmeans = KMeans(n_clusters=k).fit(affinity)
         print("Ran k-means clustering with {} iterations.\n"
               "Sum of squared distances of samples to their closest cluster center: {}".format(kmeans.n_iter_,
