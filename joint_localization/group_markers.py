@@ -58,16 +58,15 @@ def humanize_time(seconds):
     return "{:02d} hours {:02d} minutes {:02d} seconds ~{:d} milliseconds".format(hours, mins, seconds, int(ms))
 
 
-def read_c3d_file(file_path, output_fps=30):
+def read_c3d_file(file_path):
     """Read INTEL format C3D file and return a subsample of marker positions and conditionals.
     Also prints information about the file content.
 
     :param file_path: Path to C3D file.
     :type file_path: str
-    :param output_fps: out sample rate. If the file has 480fps and output_fps is 30, every 16th frame will be sampled.
-    :type output_fps: int
-    :return: marker data
-    :rtype: (list, numpy.ndarray, numpy.ndarray)
+    :return: marker data: {'marker_labels': list, 'trajectories': shape(frames, markers, coordinates),
+                           'conditionals': shape(frames, conditionals), 'frame_rate': int}
+    :rtype: dict
     """
     try:
         with open(file_path, 'rb') as file_handle:
@@ -105,27 +104,24 @@ def read_c3d_file(file_path, output_fps=30):
         raise
     print("Done.")
     
-    # There might be a lot of frames. To speed up optimization use only a subset.
-    print("Subsampling frames to {} frames per second... ".format(output_fps), end="", flush=True)
-    # Todo: Sanity checks.
-    # Todo: Write tests for sanity checks.
-    nth_frame = int(fps / output_fps)
-    frames_indices = np.arange(0, n_frames, nth_frame)
-    pos_subset = pos_array[frames_indices]
-    cond_subset = cond_array[frames_indices]
-    print("Done.")
+    data = {'marker_labels': marker_labels,
+            'trajectories': pos_array,
+            'conditionals': cond_array,
+            'frame_rate': fps,
+            }
+    return data
     
-    # Todo: handle missing/bad data
-    # The data for a given marker typically contains large errors
-    # just before the system loses track of that marker and for a
-    # short period after the marker is rediscovered. To eliminate
-    # problems with “ghost” markers and erroneous position data
-    # during those periods, the first few frames are trimmed off
-    # the beginning and end of each marker’s data segment, and any
-    # marker with a maximum number of consecutive frames less than
-    # one half second is ignored.
-    return marker_labels, pos_subset, cond_subset
-    
+# Todo: handle missing/bad data.
+# The data for a given marker typically contains large errors
+# just before the system loses track of that marker and for a
+# short period after the marker is rediscovered. To eliminate
+# problems with “ghost” markers and erroneous position data
+# during those periods, the first few frames are trimmed off
+# the beginning and end of each marker’s data segment, and any
+# marker with a maximum number of consecutive frames less than
+# one half second is ignored.
+
+
 def subsample_marker_data(marker_data, delta=1, random_offset=0, frames=None):
     """Returns a subset of the marker data and the frames used to sample.
     The default parameter values do not subsample.
@@ -427,14 +423,7 @@ def group_markers_stsc(marker_trajectories,
     # Make list from generator.
     clusters = list(clusters)
     marker_groups = best_groups_from_clusters(clusters)
-    # Todo: Move validation to tests.
-    """
-    if ground_truth:
-        print("Comparing clusters to ground truth... ", end="", flush=True)
-        validated = validate(clusters, ground_truth)
-        print("Done.")
-        print("N ground truth found in {} sampled clusters: {}".format(n_clusters, validated))
-    """
+    
     return marker_groups
     
     
@@ -489,6 +478,40 @@ def assign_labels_to_groups(marker_labels, groups):
     return labeled_groups
 
 
+def process_c3d_file(file_path, method="spectral", num_groups=17, sample_frame_rate=None):
+    # Do we support the method?
+    if method not in ["spectral", "k-means"]:
+        raise NotImplementedError("Chosen method '{}' clustering not supported.".format(method))
+    # Gather data.
+    data = read_c3d_file(file_path)
+    labels = data['marker_labels']
+    trajectories = data['trajectories']
+    #conditionals = data['conditionals']
+    c3d_fps = data['frame_rate']
+    # Subsample.
+    if sample_frame_rate is None:
+        sample_frame_rate = 0
+    if sample_frame_rate < 0:
+        raise ValueError("Subsample frame rate must be greater than Zero!")
+    elif sample_frame_rate > 0:
+        nth_frame = int(c3d_fps / sample_frame_rate)
+        trajectories, frame_indices = subsample_marker_data(trajectories, delta=nth_frame)
+        #conditionals, frame_indices = subsample_marker_data(conditionals, frames=frame_indices)
+    
+    if cluster_method == 'spectral':
+        groups_indices = group_markers_stsc(trajectories,
+                                            n_clusters=10,
+                                            nth_frame=15,  # FixMe: This should be frame rate independent.
+                                            min_groups=k_groups,
+                                            max_groups=k_groups)  # Todo: Support min/max parameter.
+    elif cluster_method == 'k-means':
+        groups_indices = group_markers_kmeans(trajectories, k_groups)
+    
+    # Assign IDs back to labels.
+    groups_labeled = assign_labels_to_groups(labels, groups_indices)
+    return groups_labeled
+    
+    
 if __name__ == "__main__":
     freeze_support()
     parser = argparse.ArgumentParser(
@@ -499,27 +522,20 @@ if __name__ == "__main__":
     parser.add_argument("-m", "--method", type=str, choices=['spectral', 'k-means'],
                         default="spectral", help="Method to use for clustering.")
     parser.add_argument("-k", type=int, default=17, help="Desired number of groups.")
-    parser.add_argument("-s", "--subsampling", type=int, default=30, help="Sub-sample frames to lower framerate.")
+    parser.add_argument("-s", "--subsample-rate", type=int, default=0, help="Sub-sample data to a lower frame rate.\n"
+                                                                            "0 to disable subsampling, "
+                                                                            "or enter desired frame rate.")
     parser.add_argument("input.c3d", type=str, help="C3D file (Intel format) with marker data.")
     args = vars(parser.parse_args())
     c3d_filepath = args['input.c3d']
     k_groups = args['k']
-    subsample_fps = args['subsampling']
     cluster_method = args['method']
+    subsample_frame_rate = args['subsample_rate']
 
-    labels, markers, conditionals = read_c3d_file(c3d_filepath, output_fps=subsample_fps)
-    
-    if cluster_method == 'spectral':
-        groups_indices = group_markers_stsc(markers,
-                                            n_clusters=10,
-                                            nth_frame=15,
-                                            min_groups=k_groups,
-                                            max_groups=k_groups)
-    elif cluster_method == 'k-means':
-        groups_indices = group_markers_kmeans(markers, k_groups)
-    
-    # Assign IDs back to labels.
-    groups_labeled = assign_labels_to_groups(labels, groups_indices)
+    groups = process_c3d_file(c3d_filepath,
+                              method=cluster_method,
+                              num_groups=k_groups,
+                              sample_frame_rate=subsample_frame_rate)
     print("Grouping of markers by labels (using {} clustering):".format(cluster_method))
-    for group_idx, marker_labels in groups_labeled.items():
+    for group_idx, marker_labels in groups.items():
         print("Group {}: {}".format(group_idx, ", ".join(marker_labels)))
