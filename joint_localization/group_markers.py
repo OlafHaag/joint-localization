@@ -163,9 +163,9 @@ def subsample_marker_data(marker_data, delta=1, random_offset=0, frames=None):
     return subset, frames_indices
 
 
-def get_cost_matrix(markers_sample):
+def get_distance_deviations(markers_sample):
     """Standard deviation in distance between marker pairs.
-    Define a cost matrix, A, such that element A ij is the
+    Define a distance matrix, A, such that element A ij is the
     standard deviation in distance between markers i and j for a
     particular sampling of frames.
     
@@ -180,20 +180,20 @@ def get_cost_matrix(markers_sample):
     return std_distances
 
 
-def sum_distance_deviations(marker_indices, cost_matrix):
+def sum_distance_deviations(marker_indices, distance_matrix):
     """Sum up standard deviations of distances for given marker indices.
     To avoid penalizing large marker groups, the standard deviation within
     a group is normalized by the number of markers in the group.
     
     :param marker_indices: marker indices to sum pairwise
     :type marker_indices: list
-    :param cost_matrix: NxN matrix containing standard deviations of pairwise distances.
-    :type cost_matrix: numpy.ndarray
+    :param distance_matrix: NxN matrix containing standard deviations of pairwise distances.
+    :type distance_matrix: numpy.ndarray
     :return: Wighted sum of standard deviations for pairwise distances.
     :rtype: float
     """
     pairs = list(combinations(marker_indices, 2))
-    return cost_matrix[tuple(zip(*pairs))].sum() / len(marker_indices)
+    return distance_matrix[tuple(zip(*pairs))].sum() / len(marker_indices)
 
 
 def get_affinity_matrix(dist_matrix, delta=4.0):
@@ -337,9 +337,9 @@ def annotate_heatmap(im, data=None, valfmt="{x:.2f}",
     
 
 def show_matrix_plot(matrix, labels, matrix_type='affinity'):
-    """Plot an affinity or cost matrix.
+    """Plot an affinity or distance matrix.
     
-    :param matrix: NxN Matrix with markers' pairwise cost/affinity.
+    :param matrix: NxN Matrix with markers' pairwise distance deviation/affinity.
     :param labels: marker labels
     :type labels: list
     :param matrix_type: Label of color bar and plot title.
@@ -371,13 +371,14 @@ def compute_stsc_cluster(marker_trajectories, sample_nth_frame=15, rnd_frame_off
     # of one half second, plus or minus a few frames.
     # This jitter ensures that any periodic errors do not affect the segmentation.
     marker_subset, _ = subsample_marker_data(marker_trajectories, sample_nth_frame, rnd_frame_offset)
-    costs = get_cost_matrix(marker_subset)
-    # The costs need to be sensibly inverted, so that low costs are closer to 1 and high costs close to zero.
-    affinity = get_affinity_matrix(costs, delta=4.0)
+    dist_mat = get_distance_deviations(marker_subset)
+    # The distance deviations need to be sensibly inverted for the algorithm,
+    # so that low values are closer to 1 and high values close to zero.
+    affinity = get_affinity_matrix(dist_mat, delta=4.0)  # Adjust delta
     #print("Commencing self tuning spectral clustering. min: {}, max:{}".format(min_groups, max_groups))
     groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)  # FixMe: spectral clustering is way too slow.
     # Sum standard deviation of distances over all marker pairs in each group.
-    sum_deviations = np.array([sum_distance_deviations(group, costs) for group in groups]).sum()
+    sum_deviations = np.array([sum_distance_deviations(group, dist_mat) for group in groups]).sum()
     return {'groups': groups, 'sum_dev': sum_deviations}
 
 
@@ -461,8 +462,8 @@ def group_markers_kmeans(marker_trajectories, k):
         groups = [[_] for _ in np.arange(num_markers)]
     elif k >= 2:
         # FixMe: Doesn't work well on fullbody. Try other metric?
-        cost_matrix = get_cost_matrix(marker_trajectories)
-        affinity = get_affinity_matrix(cost_matrix, delta=4.0)
+        dist_matrix = get_distance_deviations(marker_trajectories)
+        affinity = get_affinity_matrix(dist_matrix, delta=4.0)
         kmeans = KMeans(n_clusters=k).fit(affinity)
         print("Ran k-means clustering with {} iterations.\n"
               "Sum of squared distances of samples to their closest cluster center: {}".format(kmeans.n_iter_,
