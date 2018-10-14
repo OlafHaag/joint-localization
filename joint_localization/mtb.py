@@ -234,6 +234,8 @@ def get_rigid_body_connections(edge_weights):
     connections = [tuple(idx) for idx in connections]
     return connections
 
+# Todo: Find reasonable root joint in minimum spanning tree.
+
 
 def save_to_c3d_file(file_path, points, fps=30):
     writer = c3d.Writer(point_rate=float(fps))
@@ -249,7 +251,6 @@ def save_to_c3d_file(file_path, points, fps=30):
         
 
 def process_c3d_file(in_file,
-                     out_fps=30,
                      n_clusters=10,
                      n_cluster_processes=4,
                      min_rigid_bodies=3,
@@ -257,9 +258,12 @@ def process_c3d_file(in_file,
     """Compute rigid bodies and their joint trajectories for C3D file and save them to file.
     :param n_cluster_processes: Adjust number of processes to your CPU and data size. 0 = no multiprocessing.
     """
+    # Todo: Split up into smaller functions
     print("Processing file:", in_file)
     t0 = time.time()
-    labels, markers, conditionals = read_c3d_file(in_file, output_fps=out_fps)
+    data = read_c3d_file(in_file)
+    markers = data['trajectories']
+    
     print("Finding rigid bodies from marker trajectories through spectral clustering...")
     marker_groups = get_marker_groups(markers,
                                       n_clusters=n_clusters,
@@ -312,7 +316,7 @@ def process_c3d_file(in_file,
     mst_points = np.array([trajectory for idx, trajectory in points.items() if idx in connected_rb_indices])
     out_file_path = in_file[:-4] + '-joints.c3d'
     print("Saving trajectories to {}".format(out_file_path))
-    save_to_c3d_file(out_file_path, mst_points, out_fps)
+    save_to_c3d_file(out_file_path, mst_points, data['frame_rate'])
     print("elapsed time: {} seconds".format(time.time()-t0))
 
 
@@ -324,7 +328,6 @@ if __name__ == "__main__":
     # Todo: Move to tests
     c3d_filepath = "joint_localization/tests/Data/arm-4-4-4_clean_30fps.c3d"
     process_c3d_file(c3d_filepath,
-                     out_fps=30,
                      n_clusters=10,
                      n_cluster_processes=0,  # No multiprocessing. Takes twice as long.
                      min_rigid_bodies=3,
