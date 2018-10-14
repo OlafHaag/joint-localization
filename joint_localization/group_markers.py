@@ -480,10 +480,10 @@ def assign_labels_to_groups(marker_labels, groups):
     return labeled_groups
 
 
-def process_c3d_file(file_path, method="spectral", num_groups=17, sample_frame_rate=None):
+def process_c3d_file(file_path, cluster_method="spectral", num_groups=17, sample_frame_rate=None):
     # Do we support the method?
-    if method not in ["spectral", "k-means"]:
-        raise NotImplementedError("Chosen method '{}' clustering not supported.".format(method))
+    if cluster_method not in ["spectral", "k-means"]:
+        raise NotImplementedError("Chosen method '{}' clustering not supported.".format(cluster_method))
     # Gather data.
     data = read_c3d_file(file_path)
     labels = data['marker_labels']
@@ -504,10 +504,10 @@ def process_c3d_file(file_path, method="spectral", num_groups=17, sample_frame_r
         groups_indices = group_markers_stsc(trajectories,
                                             n_clusters=10,
                                             nth_frame=15,  # FixMe: This should be frame rate independent.
-                                            min_groups=k_groups,
-                                            max_groups=k_groups)  # Todo: Support min/max parameter.
+                                            min_groups=num_groups,
+                                            max_groups=num_groups)  # Todo: Support min/max parameter.
     elif cluster_method == 'k-means':
-        groups_indices = group_markers_kmeans(trajectories, k_groups)
+        groups_indices = group_markers_kmeans(trajectories, num_groups)
     
     # Assign IDs back to labels.
     groups_labeled = assign_labels_to_groups(labels, groups_indices)
@@ -530,13 +530,13 @@ if __name__ == "__main__":
     parser.add_argument("input.c3d", type=str, help="C3D file (Intel format) with marker data.")
     args = vars(parser.parse_args())
     c3d_filepath = args['input.c3d']
-    k_groups = args['k']
+    num_groups = args['k']
     cluster_method = args['method']
     subsample_frame_rate = args['subsample_rate']
 
     groups = process_c3d_file(c3d_filepath,
-                              method=cluster_method,
-                              num_groups=k_groups,
+                              cluster_method=cluster_method,
+                              num_groups=num_groups,
                               sample_frame_rate=subsample_frame_rate)
     print("Grouping of markers by labels (using {} clustering):".format(cluster_method))
     for group_idx, marker_labels in groups.items():
