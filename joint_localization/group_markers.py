@@ -255,6 +255,7 @@ def heatmap(data, row_labels, col_labels, ax=None,
     # Let the horizontal axes labeling appear on top.
     ax.tick_params(top=True, bottom=False,
                    labeltop=True, labelbottom=False)
+    ax.xaxis.set_label_position('top')
 
     # Rotate the tick labels and set their alignment.
     plt.setp(ax.get_xticklabels(), rotation=-30, ha="right",
@@ -346,12 +347,11 @@ def show_matrix_plot(matrix, labels, matrix_type='affinity'):
     :type matrix_type: str
     """
     size = tuple((int(0.5*x) for x in matrix.shape))
-    fig, ax = plt.subplots(figsize=size)
+    fig, ax = plt.subplots(figsize=size, tight_layout=True)
     im, cbar = heatmap(matrix, labels, labels, ax=ax,
                        cmap="tab20b", cbarlabel=matrix_type)
     texts = annotate_heatmap(im, valfmt="{x:.1f}")
-    fig.tight_layout()
-    plt.title("{} Matrix".format(matrix_type.title()))
+    ax.set_title("{} Matrix".format(matrix_type.title()))
     plt.show()
     
     
