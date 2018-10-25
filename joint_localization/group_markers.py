@@ -28,6 +28,7 @@ only over a jittered uniform sampling of frames.
 A. Kirk et al., “Skeletal parameter estimation from optical motion capture data,”
 in CVPR 2005. IEEE Computer Society Conference on, vol. 2, 2005, pp. 1185 vol. 2–.
 """
+import sys
 import warnings
 from itertools import combinations
 from multiprocessing import Pool, freeze_support
@@ -39,6 +40,9 @@ import matplotlib.pyplot as plt
 from mpl_toolkits import axes_grid1
 from sklearn.metrics.pairwise import euclidean_distances
 from sklearn.cluster.k_means_ import KMeans
+from sklearn.cluster import SpectralClustering
+from sklearn.cluster import AffinityPropagation
+from sklearn.cluster import DBSCAN
 import c3d
 
 from joint_localization.stsc import self_tuning_spectral_clustering
@@ -376,7 +380,7 @@ def compute_stsc_cluster(marker_trajectories, sample_nth_frame=15, rnd_frame_off
     # so that low values are closer to 1 and high values close to zero.
     affinity = get_affinity_matrix(dist_mat, delta=4.0)  # Adjust delta
     #print("Commencing self tuning spectral clustering. min: {}, max:{}".format(min_groups, max_groups))
-    groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)  # FixMe: spectral clustering is way too slow.
+    groups = self_tuning_spectral_clustering(affinity, min_n_cluster=min_groups, max_n_cluster=max_groups)  # FixMe: self tuning spectral clustering is way too slow.
     # Sum standard deviation of distances over all marker pairs in each group.
     sum_deviations = np.array([sum_distance_deviations(group, dist_mat) for group in groups]).sum()
     return {'groups': groups, 'sum_dev': sum_deviations}
@@ -445,6 +449,19 @@ def validate(clusters, ground_truth):
     return is_valid
 
 
+def get_feature_matrix(marker_trajectories):
+    """Reshape trajectories into 2D array, so that frame values (xyz) lie in axis 1 side by side.
+    shape = (markers, frames*3)
+    
+    :param marker_trajectories: shape (frames, markers, coordinates)
+    :type marker_trajectories: numpy.ndarray
+    :return: shape (n_samples, n_features) with features: x_frame1, y_frame1, z_frame1, x_frame2, y_frame2, z_frame2,...
+    :rtype: numpy.ndarray
+    """
+    feature_mat = np.hstack((_ for _ in marker_trajectories))
+    return feature_mat
+
+
 def n_groups_sanity_check(group_func):
     def group_func_check(*args, **kwargs):
         try:
@@ -469,25 +486,90 @@ def n_groups_sanity_check(group_func):
     return group_func_check
 
 
+def group_cluster_labels(labels):
+    print(labels)  # FixMe: Debug
+    marker_indices = labels.argsort()
+    groups = [marker_indices[labels == group].tolist() for group in np.unique(labels)]
+    return groups
+
+
 @n_groups_sanity_check
 def group_markers_kmeans(marker_trajectories, n_groups):
     """Find groups of markers by k-means clustering.
     
     :param marker_trajectories:
+    :type marker_trajectories: numpy.ndarray
     :param n_groups: Number of clusters to fit markers to.
+    :type n_groups: int
     :return: marker groups
     :rtype: list
     """
-    # FixMe: Doesn't work well on fullbody. Try other metric?
+    # FixMe: Doesn't work well on fullbody. Usually k-means takes matrix of shape=(n_samples, n_features). Try other metric?
     dist_matrix = get_distance_deviations(marker_trajectories)
     affinity = get_affinity_matrix(dist_matrix, delta=4.0)
     kmeans = KMeans(n_clusters=n_groups).fit(affinity)
     print("Ran k-means clustering with {} iterations.\n"
           "Sum of squared distances of samples to their closest cluster center: {}".format(kmeans.n_iter_,
                                                                                            kmeans.inertia_))
-    group_ids = kmeans.labels_
-    marker_indices = group_ids.argsort()
-    groups = [marker_indices[group_ids == group].tolist() for group in np.unique(group_ids)]
+    groups = group_cluster_labels(kmeans.labels_)
+    return groups
+
+
+@n_groups_sanity_check
+def group_markers_spectral(marker_trajectories, num_groups):
+    """Find groups of markers by spectral clustering.
+
+    :param marker_trajectories:
+    :type marker_trajectories: numpy.ndarray
+    :param num_groups: Number of clusters to fit markers to.
+    :type num_groups: int
+    :return: marker groups
+    :rtype: list
+    """
+    # Todo jittered samples.
+    dist_matrix = get_distance_deviations(marker_trajectories)
+    affinity = get_affinity_matrix(dist_matrix, delta=4.0)
+    clustering = SpectralClustering(n_clusters=num_groups, affinity='precomputed',
+                                    assign_labels="discretize").fit(affinity)
+    groups = group_cluster_labels(clustering.labels_)
+    return groups
+
+
+def group_markers_affinity_propagation(marker_trajectories):
+    """Find groups of markers by spectral clustering.
+
+    :param marker_trajectories:
+    :type marker_trajectories: numpy.ndarray
+    :param num_groups: Number of clusters to fit markers to.
+    :type num_groups: int
+    :return: marker groups
+    :rtype: list
+    """
+    # Todo jittered samples?
+    dist_matrix = get_distance_deviations(marker_trajectories)
+    affinity = get_affinity_matrix(dist_matrix, delta=4.0)
+    clustering = AffinityPropagation(damping=0.5, verbose=True, affinity='precomputed').fit(affinity)
+    groups = group_cluster_labels(clustering.labels_)
+    return groups
+
+
+def group_markers_dbscan(marker_trajectories):
+    """Find groups of markers by spectral clustering.
+
+    :param marker_trajectories:
+    :type marker_trajectories: numpy.ndarray
+    :param num_groups: Number of clusters to fit markers to.
+    :type num_groups: int
+    :return: marker groups
+    :rtype: list
+    """
+    # Todo jittered samples?
+    dist_matrix = get_distance_deviations(marker_trajectories)
+    #affinity = get_affinity_matrix(dist_matrix, delta=4.0)
+    # algorithm: {‘auto’, ‘ball_tree’, ‘kd_tree’, ‘brute’}
+    # eps: The maximum distance between two samples for them to be considered as in the same neighborhood.
+    clustering = DBSCAN(metric='precomputed').fit(dist_matrix)
+    groups = group_cluster_labels(clustering.labels_)
     return groups
 
 
@@ -498,7 +580,7 @@ def assign_labels_to_groups(marker_labels, groups):
 
 def process_c3d_file(file_path, cluster_method="spectral", num_groups=17, sample_frame_rate=None):
     # Do we support the method?
-    if cluster_method not in ["spectral", "k-means"]:
+    if cluster_method not in ["spectral", "stsc", "affinitypropagation", "dbscan", "k-means"]:
         raise NotImplementedError("Chosen method '{}' clustering not supported.".format(cluster_method))
     # Gather data.
     data = read_c3d_file(file_path)
@@ -516,12 +598,18 @@ def process_c3d_file(file_path, cluster_method="spectral", num_groups=17, sample
         trajectories, frame_indices = subsample_marker_data(trajectories, delta=nth_frame)
         #conditionals, frame_indices = subsample_marker_data(conditionals, frames=frame_indices)
     
-    if cluster_method == 'spectral':
+    if cluster_method == 'stsc':
         groups_indices = group_markers_stsc(trajectories,
                                             n_clusters=10,
                                             nth_frame=15,  # FixMe: This should be frame rate independent.
                                             min_groups=num_groups,
                                             max_groups=num_groups)  # Todo: Support min/max parameter.
+    elif cluster_method == 'spectral':
+        groups_indices = group_markers_spectral(trajectories, num_groups)
+    elif cluster_method == 'affinitypropagation':
+        groups_indices = group_markers_affinity_propagation(trajectories)
+    elif cluster_method == 'dbscan':
+        groups_indices = group_markers_dbscan(trajectories)
     elif cluster_method == 'k-means':
         groups_indices = group_markers_kmeans(trajectories, num_groups)
     
@@ -529,22 +617,19 @@ def process_c3d_file(file_path, cluster_method="spectral", num_groups=17, sample
     groups_labeled = assign_labels_to_groups(labels, groups_indices)
     return groups_labeled
     
-    
-if __name__ == "__main__":
-    freeze_support()
+
+def main(argv=sys.argv[1:]):
     parser = argparse.ArgumentParser(
         prog=__file__,
         description="""Find groups of markers in C3D file which behave like rigid bodies.""",
         formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument("-v", "--ver", action='version', version='%(prog)s 0.1a')
-    parser.add_argument("-m", "--method", type=str, choices=['spectral', 'k-means'],
+    parser.add_argument("-m", "--method", type=str, choices=['spectral', 'stsc', 'affinitypropagation', 'dbscan', 'k-means'],
                         default="spectral", help="Method to use for clustering.")
     parser.add_argument("-k", type=int, default=17, help="Desired number of groups.")
-    parser.add_argument("-s", "--subsample-rate", type=int, default=0, help="Sub-sample data to a lower frame rate.\n"
-                                                                            "0 to disable subsampling, "
-                                                                            "or enter desired frame rate.")
+    parser.add_argument("-s", "--subsample-rate", type=int, help="Sub-sample data to a lower frame rate.")
     parser.add_argument("input.c3d", type=str, help="C3D file (Intel format) with marker data.")
-    args = vars(parser.parse_args())
+    args = vars(parser.parse_args(argv))
     c3d_filepath = args['input.c3d']
     num_groups = args['k']
     cluster_method = args['method']
@@ -557,3 +642,9 @@ if __name__ == "__main__":
     print("Grouping of markers by labels (using {} clustering):".format(cluster_method))
     for group_idx, marker_labels in groups.items():
         print("Group {}: {}".format(group_idx, ", ".join(marker_labels)))
+
+
+if __name__ == "__main__":
+    freeze_support()
+    exit_code = int(not main())
+    sys.exit(exit_code)
